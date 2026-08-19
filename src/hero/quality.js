@@ -1,6 +1,14 @@
 /**
  * One knob for the whole effect.
  *
+ * `msaa` matters more than anything else here for perceived sharpness. Once an
+ * EffectComposer is in the chain the scene is rasterised into an offscreen
+ * render target, so the WebGL context's own `antialias` flag does nothing --
+ * the composer's `multisampling` is the only switch that is actually wired to
+ * the sample count. It was 0, which is why every silhouette was a raw
+ * staircase. MSAA shades once per pixel per triangle, so on a scene this
+ * fragment-heavy it costs bandwidth, not shader time.
+ *
  * The expensive parts, in order:
  *   1. fragment cost  = count x NEIGHBOUR_COUNT x 3 cylinder tests x 2 rays
  *   2. vertex cost    = count x triangles-per-cross, rendered twice when the

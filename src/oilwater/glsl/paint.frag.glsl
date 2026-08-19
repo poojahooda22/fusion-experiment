@@ -5,14 +5,17 @@ precision highp float;
  *
  * One RGBA16F buffer, ping-ponged, holding a very cheap 2D fluid:
  *
- *   .rg  velocity            (uv units per second)
+ *   .rg  velocity            (uv units per SECOND)
  *   .b   film thickness      (fast dissipating - the sharp leading edge)
  *   .a   slow film           (slow dissipating - the lingering broad sheen)
  *
- * Each step: semi-Lagrangian advection, a curl-noise swirl proportional to
- * how much paint is present, the pointer stroke stamped as a capsule, then
- * exponential dissipation. There is no pressure projection - it is not trying
- * to be Navier-Stokes, it is trying to look like oil pushed across glass.
+ * Each step: diffusion, semi-Lagrangian advection, a curl-noise swirl, the
+ * pointer stroke stamped as a capsule, then exponential dissipation. There is
+ * no pressure projection - it is not trying to be Navier-Stokes, it is trying
+ * to look like oil dragged across glass.
+ *
+ * Every deposit and every decay is scaled by u_delta, so the effect behaves
+ * identically at 30, 60 and 144 fps.
  * ------------------------------------------------------------------ */
 
 varying vec2 v_uv;
@@ -25,13 +28,15 @@ uniform vec2  u_scrollOffset;         // keeps paint anchored to the page
 uniform float u_delta;                // seconds
 uniform float u_time;
 
-uniform vec4  u_drawFrom;             // xy = uv, z = radius, w = strength
+uniform vec4  u_drawFrom;             // xy = uv, z = radius, w = ink per second
 uniform vec4  u_drawTo;
 uniform float u_pushStrength;
-uniform vec3  u_dissipations;         // per-frame decay for (vel, film, slow)
+uniform vec3  u_dissipations;         // per-frame-at-60fps decay for (vel, film, slow)
 uniform vec2  u_vel;                  // global drift, e.g. scroll inertia
 uniform float u_advect;
 uniform float u_lowInfluence;
+uniform float u_diffuse;              // 0 = none, ~0.5 = soupy
+uniform float u_diffuseRadius;        // in texels
 
 #ifdef USE_NOISE
 uniform float u_curlScale;
@@ -68,13 +73,12 @@ vec3 noised(vec2 p) {
   float c = hash12(i + vec2(0.0, 1.0));
   float d = hash12(i + vec2(1.0, 1.0));
 
-  float k0 = a;
   float k1 = b - a;
   float k2 = c - a;
   float k3 = a - b - c + d;
 
   return vec3(
-    k0 + k1 * u.x + k2 * u.y + k3 * u.x * u.y,
+    a + k1 * u.x + k2 * u.y + k3 * u.x * u.y,
     du.x * (k1 + k3 * u.y),
     du.y * (k2 + k3 * u.x)
   );
@@ -96,6 +100,22 @@ void main() {
   vec2 src = uv - vel * u_delta * u_advect + u_scrollOffset;
   vec4 data = texture2D(u_prevPaintTexture, src);
 
+  /* --- diffuse ---------------------------------------------------------
+   * Without this the film is only ever transported and decayed, so it stays
+   * exactly as wide as the brush that laid it down. A four-tap laplacian-ish
+   * blend is what turns a stroke into a spreading layer. Cheap, and the low
+   * buffer does most of the work because it is ~1/9 the resolution.        */
+  if (u_diffuse > 0.0) {
+    vec2 e = u_texelSize * u_diffuseRadius;
+    vec4 nb = 0.25 * (
+      texture2D(u_prevPaintTexture, src + vec2(e.x, 0.0)) +
+      texture2D(u_prevPaintTexture, src - vec2(e.x, 0.0)) +
+      texture2D(u_prevPaintTexture, src + vec2(0.0, e.y)) +
+      texture2D(u_prevPaintTexture, src - vec2(0.0, e.y))
+    );
+    data = mix(data, nb, clamp(u_diffuse * u_delta * 60.0, 0.0, 1.0));
+  }
+
   // --- borrow the broad motion from the coarse buffer -------------------
   vec4 low = texture2D(u_lowPaintTexture, src);
   data.rg += low.rg * u_lowInfluence * u_delta;
@@ -109,13 +129,26 @@ void main() {
   // --- stamp the pointer stroke -----------------------------------------
   float radius = max(u_drawTo.z, 1e-4);
   float d = sdSegment(uv * u_aspect, u_drawFrom.xy * u_aspect, u_drawTo.xy * u_aspect);
-  float stamp = smoothstep(radius, radius * 0.15, d);
+
+  /* Long-tailed falloff rather than smoothstep with a flat core. The flat core
+   * had zero gradient, and since the display pass reads the film's gradient to
+   * bend the image, a flat core meant the middle of the stroke did nothing and
+   * all the refraction happened in a thin ring at its edge. */
+  float q = clamp(d / radius, 0.0, 1.0);
+  float stamp = (1.0 - q * q) * (1.0 - q * q);
 
   if (stamp > 0.0) {
-    vec2 stroke = (u_drawTo.xy - u_drawFrom.xy);
+    /* u_drawTo - u_drawFrom is a per-FRAME displacement; .rg is read above as
+     * uv per SECOND. Dividing by dt is what lets a flick actually throw the
+     * paint across the canvas instead of nudging it a few pixels - and it is
+     * what makes the push identical at 30 and 144 fps. */
+    vec2 stroke = (u_drawTo.xy - u_drawFrom.xy) / max(u_delta, 1e-5);
     data.rg += stroke * stamp * u_pushStrength;
-    data.b  += stamp * u_drawTo.w;
-    data.a  += stamp * u_drawTo.w * 0.55;
+
+    // ink is deposited per second, so dwelling thickens the film
+    float ink = u_drawTo.w * u_delta * 60.0;
+    data.b += stamp * ink;
+    data.a += stamp * ink * 0.6;
   }
 
   // --- dissipate (exponential, so it is frame-rate independent) ----------
@@ -125,9 +158,9 @@ void main() {
   data.a  *= decay.z;
 
   // keep the sim from exploding if the pointer is dragged very fast
-  data.rg = clamp(data.rg, vec2(-6.0), vec2(6.0));
-  data.b  = min(data.b, 2.5);
-  data.a  = min(data.a, 2.0);
+  data.rg = clamp(data.rg, vec2(-4.0), vec2(4.0));
+  data.b  = min(data.b, 1.3);
+  data.a  = min(data.a, 1.1);
 
   gl_FragColor = data;
 }

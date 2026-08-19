@@ -22,8 +22,18 @@ uniform float uColorMultiplier;  // frequency of the interference bands
 uniform float uShade;            // overall strength of colour + sheen
 uniform vec3  uLightDirection;
 
+/*
+ * The surface height that everything geometric is derived from.
+ *
+ * This deliberately includes the SLOW channel. Reading .b alone tied the
+ * distortion, the normal and the sheen to a film with a ~0.8 s half-life, so a
+ * third of a second after the stroke the only thing left was a flat tint - all
+ * the liquid character died while the colour lingered. Matching `mass` keeps
+ * the geometry alive as long as the paint is visible.
+ */
 float filmAt(vec2 uv) {
-  return texture2D(uPaint, uv).b;
+  vec4 d = texture2D(uPaint, uv);
+  return d.b + d.a * 0.6;
 }
 
 void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor) {
@@ -31,20 +41,27 @@ void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor)
   vec2 vel = data.rg;
   float mass = data.b + data.a * 0.6;
 
-  // the vast majority of the screen has no paint on it - bail immediately
-  if (mass < 0.0025) {
+  // the vast majority of the screen has no paint on it - bail immediately.
+  // kept well below the visibility floor so the cull never shows as a contour
+  if (mass < 0.0012) {
     outputColor = inputColor;
     return;
   }
 
-  // central difference of the thickness field = the slope of the oil surface
-  vec2 e = uPaintTexel;
+  /* Central difference of the thickness field = the slope of the oil surface.
+   * Taken over TWO texels rather than one: the paint buffer is half-resolution,
+   * so a one-texel stencil measures slope at the Nyquist limit of the sim and
+   * the result aliases into chromatic static wherever the fluid has filaments. */
+  vec2 e = uPaintTexel * 2.0;
   vec2 grad = vec2(
     filmAt(uv + vec2(e.x, 0.0)) - filmAt(uv - vec2(e.x, 0.0)),
     filmAt(uv + vec2(0.0, e.y)) - filmAt(uv - vec2(0.0, e.y))
   );
 
-  vec2 offset = (grad * uMultiplier + vel * uAmount) * 0.02;
+  // 0.02 keeps the tuning numbers in a readable range; the product is a uv offset
+vec2 offset = (grad * uMultiplier + vel * uAmount) * 0.02;
+  // an unbounded offset tears the image apart on a fast flick
+  offset = clamp(offset, vec2(-0.055), vec2(0.055));
 
   vec2 uvR = clamp(uv - offset * (1.0 + uRgbShift), vec2(0.001), vec2(0.999));
   vec2 uvG = clamp(uv - offset,                     vec2(0.001), vec2(0.999));
@@ -61,13 +78,19 @@ void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor)
    * running it through three phase-shifted cosines gives the familiar petrol
    * rainbow, and because thickness varies smoothly the bands sweep as the
    * liquid moves. */
-  float thickness = mass * uColorMultiplier
-                  + length(vel) * 0.4
-                  + dot(grad, grad) * 60.0;
+  /* Optical path length. Driven by thickness and, weakly, by flow speed.
+   * A `dot(grad, grad)` term used to be in here and it was a mistake: squaring
+   * the slope makes the band frequency explode exactly where the film has the
+   * most detail, so the rainbow aliased into per-pixel noise instead of reading
+   * as smooth interference fringes. */
+  float thickness = mass * uColorMultiplier + length(vel) * 0.22;
   vec3 iridescence = 0.5 + 0.5 * cos(6.28318530718 *
       (thickness * vec3(1.0, 0.86, 0.71) + vec3(0.0, 0.28, 0.56)));
 
-  float coverage = smoothstep(0.0, 0.3, mass);
+  /* A low knee is what turns this from a hard-edged disc into a layer: with a
+   * 0.3 knee the film saturated to fully opaque across most of the stroke and
+   * the entire soft falloff was crushed into its outer third. */
+  float coverage = smoothstep(0.0, 0.14, mass);
   color = mix(color, color * (0.32 + 1.55 * iridescence) + iridescence * 0.05, coverage * uShade);
 
   // wet sheen off the film's normal

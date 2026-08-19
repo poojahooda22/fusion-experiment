@@ -62,6 +62,8 @@ export class ScreenPaint {
         u_lowInfluence: { value: lowInfluence },
         u_curlScale: { value: curlScale },
         u_curlStrength: { value: curlStrength },
+        u_diffuse: { value: 0 },
+        u_diffuseRadius: { value: 1.6 },
       },
     })
 
@@ -72,11 +74,38 @@ export class ScreenPaint {
     this.radius = radius
     this.strength = strength
 
+    /* Per-pass character. The coarse buffer is not a downsampled copy of the
+     * fine one - it is a genuinely different field: a much wider brush, much
+     * slower decay, a much larger noise cell and heavier diffusion. That is
+     * what makes it behave as one large body of liquid that the fine buffer
+     * then rides on. */
+    this.mainPass = {
+      radius,
+      dissipations: options.dissipations ?? dissipations,
+      curlScale,
+      curlStrength: options.curlMain ?? curlStrength,
+      diffuse: options.diffuse ?? 0.22,
+      diffuseRadius: 1.6,
+      lowInfluence,
+    }
+    this.lowPass = {
+      radiusScale: options.lowRadiusScale ?? 2.4,
+      dissipations: options.lowDissipations ?? [0.996, 0.9955, 0.9988],
+      curlScaleScale: 0.45,
+      curlStrength: options.curlLow ?? 0.55,
+      diffuse: options.lowDiffuse ?? 0.5,
+      diffuseRadius: 2.0,
+      lowInfluence: 0,
+    }
+
     this.main = [this._makeTarget(), this._makeTarget()]
     this.low = [this._makeTarget(), this._makeTarget()]
     this.index = 0
 
     // pointer state, in uv space
+    this.mainTexel = new THREE.Vector2(1 / 512, 1 / 512)
+    this.lowTexel = new THREE.Vector2(1 / 128, 1 / 128)
+
     this._prev = new THREE.Vector2(0.5, 0.5)
     this._curr = new THREE.Vector2(0.5, 0.5)
     this._pending = false
@@ -107,7 +136,8 @@ export class ScreenPaint {
     const lh = Math.max(4, Math.floor(height * this.lowScale))
     this.main.forEach((rt) => rt.setSize(w, h))
     this.low.forEach((rt) => rt.setSize(lw, lh))
-    this.material.uniforms.u_texelSize.value.set(1 / w, 1 / h)
+    this.mainTexel.set(1 / w, 1 / h)
+    this.lowTexel.set(1 / lw, 1 / lh)
     this._cleared = false
     this.material.uniforms.u_aspect.value.set(width / height, 1)
     this.width = w
@@ -152,6 +182,7 @@ export class ScreenPaint {
       u.u_drawTo.value.w = 0
       u.u_drawFrom.value.w = 0
     }
+    // radius is re-applied per pass below, w carries the ink rate
 
     const next = this.index ^ 1
     const renderer = this.renderer
@@ -172,19 +203,30 @@ export class ScreenPaint {
       this._cleared = true
     }
 
-    // --- coarse pass: no low input of its own, larger swirl ---------------
+    const applyPass = (cfg, radiusScale, curlScaleScale) => {
+      u.u_dissipations.value.set(...cfg.dissipations)
+      u.u_curlScale.value = this.mainPass.curlScale * (curlScaleScale ?? 1)
+      u.u_curlStrength.value = cfg.curlStrength
+      u.u_diffuse.value = cfg.diffuse
+      u.u_diffuseRadius.value = cfg.diffuseRadius
+      u.u_lowInfluence.value = cfg.lowInfluence
+      u.u_drawFrom.value.z = this.radius * (radiusScale ?? 1)
+      u.u_drawTo.value.z = this.radius * (radiusScale ?? 1)
+    }
+
+    // --- coarse pass: wide brush, slow decay, big swirl, heavy diffusion ---
+    applyPass(this.lowPass, this.lowPass.radiusScale, this.lowPass.curlScaleScale)
     u.u_prevPaintTexture.value = this.low[this.index].texture
     u.u_lowPaintTexture.value = this.low[this.index].texture
-    u.u_lowInfluence.value = 0
-    u.u_curlStrength.value = this._curlLow ?? 1.2
+    u.u_texelSize.value.copy(this.lowTexel)
     renderer.setRenderTarget(this.low[next])
     renderer.render(this.scene, this.camera)
 
-    // --- fine pass: reads the coarse result --------------------------------
+    // --- fine pass: reads the coarse result ---------------------------------
+    applyPass(this.mainPass, 1, 1)
     u.u_prevPaintTexture.value = this.main[this.index].texture
     u.u_lowPaintTexture.value = this.low[next].texture
-    u.u_lowInfluence.value = this._lowInfluence ?? 2.2
-    u.u_curlStrength.value = this._curlMain ?? 2.4
+    u.u_texelSize.value.copy(this.mainTexel)
     renderer.setRenderTarget(this.main[next])
     renderer.render(this.scene, this.camera)
 
@@ -193,14 +235,24 @@ export class ScreenPaint {
     this.index = next
   }
 
-  configure({ curlLow, curlMain, lowInfluence, radius, strength, pushStrength, dissipations }) {
-    if (curlLow !== undefined) this._curlLow = curlLow
-    if (curlMain !== undefined) this._curlMain = curlMain
-    if (lowInfluence !== undefined) this._lowInfluence = lowInfluence
+  configure(options = {}) {
+    const {
+      curlLow, curlMain, curlScale, lowInfluence, radius, strength, pushStrength,
+      dissipations, lowDissipations, diffuse, lowDiffuse, lowRadiusScale, advect,
+    } = options
+    if (curlMain !== undefined) this.mainPass.curlStrength = curlMain
+    if (curlLow !== undefined) this.lowPass.curlStrength = curlLow
+    if (curlScale !== undefined) this.mainPass.curlScale = curlScale
+    if (lowInfluence !== undefined) this.mainPass.lowInfluence = lowInfluence
+    if (diffuse !== undefined) this.mainPass.diffuse = diffuse
+    if (lowDiffuse !== undefined) this.lowPass.diffuse = lowDiffuse
+    if (lowRadiusScale !== undefined) this.lowPass.radiusScale = lowRadiusScale
+    if (dissipations !== undefined) this.mainPass.dissipations = dissipations
+    if (lowDissipations !== undefined) this.lowPass.dissipations = lowDissipations
     if (radius !== undefined) this.radius = radius
     if (strength !== undefined) this.strength = strength
+    if (advect !== undefined) this.material.uniforms.u_advect.value = advect
     if (pushStrength !== undefined) this.material.uniforms.u_pushStrength.value = pushStrength
-    if (dissipations !== undefined) this.material.uniforms.u_dissipations.value.set(...dissipations)
   }
 
   dispose() {

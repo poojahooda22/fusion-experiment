@@ -1,6 +1,6 @@
 # Neighbourhood ray-traced cross field
 
-A React Three Fiber study of a neighbour-traced hero: a cluster of
+A React Three Fiber re-implementation of a reference hero: a cluster of
 tumbling "jack" shapes, rigid-body simulated with Rapier, shaded by a custom
 material that ray-traces each object's nearest neighbours in the fragment
 shader to get reflections, contact shadows, occlusion and colour bleeding.
@@ -49,7 +49,7 @@ because the post chain does the tone mapping.
 | query | effect |
 | --- | --- |
 | `?quality=raw` | full scene, post chain off — the quickest way to see what the material alone does |
-| `?quality=low` | 26 crosses, coarser mesh, no refraction pass, no depth of field |
+| `?quality=low` | 16 crosses, coarser mesh, no refraction pass, 2× MSAA |
 | `?stats=1` | exposes the R3F state as `window.__hero` for `__hero.gl.info` |
 | `?debug=shape` | the cross on its own at three fixed orientations, for measuring the silhouette |
 
@@ -73,7 +73,7 @@ src/hero/
   Crosses.jsx               the field: bodies, forces, click, per-frame uniform feed
   CameraRig.jsx             pointer parallax
   RefractionCapture.jsx     half-res pre-pass + mip chain for the frosted material
-  Post.jsx                  DOF -> bloom -> ACES -> grain -> vignette
+  Post.jsx                  bloom -> ACES -> oil-water -> grain -> vignette
   palettes.js               colours + the material recipes and their weights
   quality.js                the one perf knob
 src/oilwater/
@@ -100,6 +100,7 @@ src/oilwater/
 
 | where | what |
 | --- | --- |
+| `quality.js` → `msaa` | 4 is the reason the edges are sharp. Dropping it to 0 undoes most of it |
 | `material/crossMaterial.js` → `NEIGHBOUR_COUNT` | 8 is the sweet spot. 4 loses obvious reflections, 12 costs ~40% more fragment time |
 | `palettes.js` → `RECIPES[].weight` | the mix of glossy / rubber / frosted pieces |
 | `palettes.js` → `PALETTES` | add or reorder the click-through colours |
@@ -113,7 +114,7 @@ src/oilwater/
 
 * The ray-trace proxy is three cylinders — it ignores the hub fillet and the
   bores, so reflections show a slightly simpler shape than the silhouette.
-* `postprocessing` logs a `glBlitFramebuffer` warning at startup when depth of
-  field is enabled. It is harmless and comes from the library's depth pass.
+* Depth of field is off by default — see `TECHNIQUE.md §9b` for why it could
+  not simply be tuned down. `<Post dof />` puts it back.
 * No `prefers-reduced-motion` handling yet; add it in `Crosses.jsx` if you need
   it.

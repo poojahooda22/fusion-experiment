@@ -1,4 +1,4 @@
-# How the neighbour-traced hero works
+# How the reference hero actually works
 
 Everything below is either (a) something I read off the live site, or (b) how I
 rebuilt it. Section 1 is the evidence; the rest is the rebuild.
@@ -7,7 +7,7 @@ rebuilt it. Section 1 is the evidence; the rest is the rebuild.
 
 ## 1. What the original is doing
 
-Inspecting the reference implementation at runtime gives a fairly complete picture.
+Opening the reference site and inspecting the runtime gives a fairly complete picture.
 
 **Stack.** `window.__THREE__ === 158`, so it is three.js r158. One 1.25 MB
 bundle, no dynamic imports. Loaded assets: 20 `.buf` files (their own binary
@@ -108,11 +108,13 @@ and leaves concave ones alone.
 
 `lib/crossGeometry.js` turns that field into a mesh:
 
-1. Sample `-sdf` into a 64³ scalar field and polygonise it with three's
+1. Sample `-sdf` into a 72³ scalar field and polygonise it with three's
    `MarchingCubes` at `isolation = 0`. (`-sdf` because marching cubes wants
    *inside* to be the high value.)
-2. Weld the non-indexed output on a 1e-4 grid — 26 120 triangles drop from
-   78 360 vertices to 13 062.
+2. Weld the non-indexed output on a 1e-4 grid — 31 496 triangles drop from
+   94 488 vertices to 15 750. (72 rather than 64 because `round = 0.035` has to
+   stay above one grid cell or the tip fillets facet; at 64 the cell is 0.0343
+   and the rounding disappears into it.)
 3. **Snap every vertex onto the exact surface** with two Newton steps,
    `p -= n * sdf(p)`. Marching cubes places vertices by linearly interpolating
    the field along a cell edge, which is only first-order accurate; on a
@@ -121,7 +123,7 @@ and leaves concave ones alone.
    single triangle. This is the difference between "clean machined object" and
    "slightly melted".
 4. Replace the marching-cubes normals with the analytic SDF gradient. Gradient
-   normals are exact, so a 64³ mesh shades like a much denser one.
+   normals are exact, so a 72³ mesh shades like a much denser one.
 5. Bake two extra attributes per vertex:
    * `aAo` — iq's SDF ambient occlusion, five taps marched along the normal.
      Darkens the fillets and the insides of the bores. Free at runtime.
@@ -132,7 +134,7 @@ and leaves concave ones alone.
    Marching-cubes implementations disagree about orientation and this is
    cheaper than reasoning about it.
 
-Cost: ~180 ms once, at startup.
+Cost: ~256 ms once, at startup.
 
 **The proportions matter more than anything else in this file.** Measured off
 the reference at an 1800 px window, the overall span of a cross is about
@@ -433,6 +435,72 @@ material uses.
 
 ---
 
+## 9b. Sharpness — four things that were quietly softening every frame
+
+Worth its own section, because three of the four are invisible in code review
+and one of them is a units trap in a third-party library.
+
+**1. There was no antialiasing at all.** The `Canvas` had `antialias: true`,
+which does nothing here: once an `EffectComposer` is in the chain the scene is
+rasterised into an offscreen render target, and the WebGL context's `antialias`
+attribute only affects the *default* framebuffer. The composer's own
+`multisampling` prop is the only switch wired to the sample count, and it was
+`0`. Every silhouette was a raw staircase.
+
+```jsx
+<EffectComposer multisampling={4} …>   // was 0
+```
+
+MSAA shades once per pixel per triangle, so on a scene this fragment-heavy it
+costs bandwidth, not shader time — the cheapest quality in the whole project.
+
+**2. `DepthOfField` was blurring ~90% of the frame, and it could not be tuned
+out.** In `postprocessing` 6.3x, `focalLength` is a deprecated alias for
+**`focusRange`, in world units** — it was a normalised 0..1 value in older
+versions, which is where `0.14` came from. That gave an in-focus shell 0.28
+world units deep around a cluster spanning more than four units:
+
+| | |
+| --- | --- |
+| focus distance | 6.40 world units |
+| in-focus shell | 6.26 … 6.54 |
+| cluster surface range | 4.73 … 8.88 |
+| surface at **maximum** circle of confusion | **91.5 %** |
+
+A single cross is four to six times deeper than the entire in-focus band. And
+no value fixes it: the CoC ramp is `smoothstep(0.0, focusRange, …)`, which has
+no flat in-focus plateau — it starts blurring at zero deviation.
+
+Worse, the `height={720}` prop sizes the effect's internal bokeh buffers, and
+where the far CoC saturates the composite *discards* the full-resolution input
+and replaces it with the upsampled 720p version. At dpr 2 that is a 2.3× linear
+downsample applied to most of the frame.
+
+The effect is now removed entirely — which is also a straight speedup, since it
+was eight fullscreen passes. `<Post dof />` is left as an opt-in.
+
+**3. A ring of speckle around every bore, from the object's own reflection
+proxy.** The ray-trace proxy is three solid capped cylinders, but the real arm
+tip is an annulus with a bore through it. The proxy's cap plane sat exactly at
+the true tip, so it intercepted precisely the rays that should have escaped
+through the hole — a stochastic hit/miss that dithered into salt and pepper.
+Pulling the self proxy's *length* back hard fixes it and costs nothing that
+matters, because arm-to-arm self reflection happens on the sides, not the caps:
+
+```glsl
+intersectCross(lo, ld, pr.w * u_armRatio.x * 0.78,   // length: pulled well back
+                       pr.w * u_armRatio.y * 0.88, n) // radius: barely shrunk
+```
+
+**4. One binary shadow ray dithers.** `traceShadow` returns 0 or 1, so a single
+stochastic sample across a penumbra is pure noise no matter how good the blue
+noise is. Two decorrelated samples quarter the variance for one extra trace.
+
+The canvas CSS was also forcing `width/height: 100% !important`, which put the
+backing store a fraction of a pixel off the layout box and made the compositor
+bilinearly resample every frame. three already writes exact pixel dimensions to
+`canvas.style`; the override just had to go.
+
 ## 10. Performance
 
 Measured at 1204×710, `quality=high`, 28 crosses:
@@ -440,19 +508,21 @@ Measured at 1204×710, `quality=high`, 28 crosses:
 | | |
 | --- | --- |
 | meshes | 28, one draw call each, one shared geometry; the crosses compile 2 programs (opaque + frosted) |
-| triangles | 26 120 per cross, ~730 k per pass, ×2 passes with refraction on |
+| triangles | 31 496 per cross at resolution 72, ~880 k per pass, ×2 passes with refraction on |
+| antialiasing | 4× MSAA on the composer (2× on the `low` preset) |
 | fragment work | per pixel: 2 rays × (8 sphere rejects + ~3 surviving × 3 cylinder tests) + 8 analytic sphere occlusions |
-| startup | ~180 ms geometry + ~70 ms blue noise + ~10 ms matcap |
+| startup | ~256 ms geometry + ~70 ms blue noise + ~10 ms matcap |
 | textures | 30 (mostly the post chain's) |
 
 The effect is fragment-bound, and `NEIGHBOUR_COUNT` is the exponent. In order of
 what to cut when it is slow:
 
-1. depth of field (by a wide margin the most expensive effect)
+1. `multisampling` 4 → 2 → 0 (memory and bandwidth, not shader time)
 2. the refraction pre-pass — halves the vertex work
-3. `NEIGHBOUR_COUNT` 8 → 6
-4. cross count
-5. marching cubes resolution
+3. the second shadow sample in `cross.frag.glsl`
+4. `NEIGHBOUR_COUNT` 8 → 6
+5. cross count
+6. marching cubes resolution
 
 `quality.js` bundles these into `high` / `medium` / `low` presets and
 auto-selects from `pointer: coarse`, viewport size and

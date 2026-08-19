@@ -80,10 +80,11 @@
   transition: background 500ms ease;
 }
 
+/* three sets exact pixel dimensions on canvas.style itself; forcing 100% here
+   made the backing store a fraction of a pixel off the layout box, so the
+   compositor bilinearly resampled every frame. */
 .hero__stage canvas {
   display: block;
-  width: 100% !important;
-  height: 100% !important;
 }
 
 .hero__hint {

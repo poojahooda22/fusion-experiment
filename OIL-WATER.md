@@ -124,6 +124,28 @@ consumers there are.
 
 ---
 
+## 2b. What the reference actually measures
+
+Screenshotting the reference at 1288×937 while dragging, and again two seconds
+later:
+
+| | |
+| --- | --- |
+| fresh smear thickness | ~160 px = **17 % of viewport height** → brush radius ≈ 0.085 in screen-height units |
+| fresh smear length | ~870 px = **68 % of viewport width** after a single drag |
+| still visibly flowing at | **> 2 s**, thinned and stretched, not faded in place |
+| rainbow | concentrated in the thin high-gradient edges, not the body |
+| body | dark and glassy — it *displaces* what is behind it |
+
+That last row is the point people miss. The shapes appear to "move like
+particles" under the cursor because the oil layer is **bending the image**, not
+because anything in the physics reacted. The distortion is the effect.
+
+The length is the diagnostic number. A 870 px trail from one gesture is not
+something a bigger brush produces — it means the paint is genuinely being
+thrown across the canvas and then carried by its own velocity field. Which is
+exactly what the first version of this got wrong (see below).
+
 ## 3. The simulation
 
 `src/oilwater/glsl/paint.frag.glsl`. Channel layout:
@@ -184,6 +206,53 @@ step here to enforce incompressibility; skipping it costs a lot of physical
 accuracy and almost nothing visually, because curl noise already supplies the
 divergence-free swirl the eye is reading.
 
+### The three bugs that made it a disc instead of a layer
+
+Worth recording, because each one is a single line and each one was worth more
+than any amount of parameter tuning.
+
+**1. The velocity deposit was a per-frame delta being read as a velocity.**
+
+```glsl
+vec2 stroke = (u_drawTo.xy - u_drawFrom.xy) / max(u_delta, 1e-5);   // the /dt
+```
+
+`u_drawTo - u_drawFrom` is how far the pointer moved *this frame*; `.rg` is
+consumed by the advection step as uv *per second*. Without the division the
+deposited velocity was 60× too small at 60 fps — a 1000 px/s drag produced a
+**7 px** smear instead of a 430 px one. The giveaway was the safety clamp:
+`clamp(data.rg, -4.0, 4.0)` allows ~5000 px/s, and real values were peaking at
+0.3 % of it. It was also a frame-rate bug: the effect was four times stronger
+on a 30 Hz machine than on a 144 Hz one.
+
+**2. There was no diffusion at all.** `u_texelSize` was declared and uploaded
+and never read. Paint was only ever advected and decayed, so the film stayed
+exactly as wide as the brush that laid it down. A four-tap blend against the
+neighbours is what turns a stroke into a spreading layer, and it is nearly free
+on the coarse buffer, which is 1/9 the resolution.
+
+**3. The ink deposit had no `dt`,** so stroke intensity scaled with frame rate —
+a fast flick laid down four times as much paint at 120 fps as at 30. Ink is
+deposited per *second* now, which also gives the natural behaviour that
+dwelling in one place thickens the film.
+
+### The coarse buffer is a different field, not a smaller copy
+
+Originally both passes ran the same shader with the same brush, the same decay
+and the same noise scale, differing only in `curlStrength` — so the "two-scale"
+architecture contributed a 1.57× velocity persistence multiplier and nothing
+else. It now has its own character:
+
+| | fine | coarse |
+| --- | --- | --- |
+| brush radius | ×1 | **×2.4** |
+| dissipation (vel / film / slow) | 0.9885 / 0.9836 / 0.9954 | **0.996 / 0.9955 / 0.9988** |
+| noise cell | ×1 | **×2.2** |
+| diffusion | 0.34 | **0.5** |
+
+That is what makes it read as one large body of liquid the fine detail rides
+on, rather than as a downsampled ghost of the same stroke.
+
 ---
 
 ## 4. The post effect
@@ -225,10 +294,29 @@ Approximating the path length by thickness plus flow speed and running it
 through three phase-shifted cosines reproduces that:
 
 ```glsl
-float thickness = mass * u_colorMultiplier + length(vel) * 0.4 + dot(grad, grad) * 60.0;
+float thickness = mass * u_colorMultiplier + length(vel) * 0.22;
 vec3 iridescence = 0.5 + 0.5 * cos(6.28318 * (thickness * vec3(1.0, 0.86, 0.71)
                                             + vec3(0.0, 0.28, 0.56)));
 ```
+
+There used to be a `+ dot(grad, grad) * 60.0` term in there and it was a
+mistake worth naming: squaring the slope makes the band frequency explode
+exactly where the film has the most detail, so the rainbow aliased into
+per-pixel chromatic static instead of reading as smooth interference fringes.
+For the same reason the gradient stencil spans **two** paint texels, not one —
+the paint buffer is half-resolution, so a one-texel central difference measures
+slope at the Nyquist limit of the simulation.
+
+Two more things the display pass has to get right, both of which were wrong at
+first:
+
+* **`filmAt` must include the slow channel.** Reading `.b` alone tied the
+  distortion, the surface normal and the sheen to a film with a sub-second
+  half-life, so a third of a second after the stroke all that survived was a
+  flat tint — the colour outlived the liquid.
+* **The coverage knee has to be low.** `smoothstep(0.0, 0.3, mass)` saturated
+  to fully opaque across most of the stroke and crushed the entire soft falloff
+  into its outer third: a hard-edged disc. `0.14` gives a layer.
 
 The `vec3(1.0, 0.86, 0.71)` is the per-channel frequency — red bands are wider
 than blue because red light has the longer wavelength. That detail is what

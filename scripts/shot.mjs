@@ -29,7 +29,7 @@ for (let i = 0; i < clicks; i++) {
   await page.waitForTimeout(1500)
 }
 await page.waitForTimeout(500)
-await page.screenshot({ path: out })
+await page.screenshot({ path: out, timeout: 180000 })
 
 const info = await page.evaluate(() => {
   const c = document.querySelector('canvas')

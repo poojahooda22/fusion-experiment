@@ -66,16 +66,23 @@ float traceNeighbourhood(vec3 ro, vec3 rd, out vec3 hitNormal, out vec3 hitColor
   hitNormal = vec3(0.0);
   hitColor  = vec3(0.0);
 
-  // ourselves first - this is what gives the crosses real self-reflection
-  // between their own arms. The proxy is shrunk slightly so a ray leaving the
-  // surface cannot immediately re-hit the cylinder it started on.
+  /* Ourselves first - this is what gives the crosses real self-reflection
+   * between their own arms.
+   *
+   * The self proxy is shrunk hard, and the length far more than the radius.
+   * The proxy is a SOLID capped cylinder but the real arm tip is an annulus
+   * with a bore through it, so a proxy cap sitting at the true tip plane
+   * intercepts exactly the rays that should escape through the hole - which
+   * showed up as a ring of salt-and-pepper speckle around every bore. Pulling
+   * the cap back behind the bore floor removes it, and costs nothing that
+   * matters: arm-to-arm self reflection happens on the sides, not the caps. */
   {
     vec4 pr = u_selfPositionRadius;
     vec4 q  = u_selfRotation;
     vec3 lo = qrotate(qinverse(q), ro - pr.xyz);
     vec3 ld = qrotate(qinverse(q), rd);
     vec3 n;
-    float t = intersectCross(lo, ld, pr.w * u_armRatio.x * 0.92, pr.w * u_armRatio.y * 0.92, n);
+    float t = intersectCross(lo, ld, pr.w * u_armRatio.x * 0.78, pr.w * u_armRatio.y * 0.88, n);
     if (t > 0.0 && t < best) {
       best = t;
       hitNormal = qrotate(q, n);
@@ -114,7 +121,7 @@ float traceShadow(vec3 ro, vec3 rd, float maxT) {
     vec4 qi = qinverse(u_selfRotation);
     vec3 n;
     float t = intersectCross(qrotate(qi, ro - pr.xyz), qrotate(qi, rd),
-                             pr.w * u_armRatio.x * 0.92, pr.w * u_armRatio.y * 0.92, n);
+                             pr.w * u_armRatio.x * 0.78, pr.w * u_armRatio.y * 0.88, n);
     if (t > 0.0 && t < maxT) vis *= u_selfTransmission;
   }
 
@@ -185,8 +192,16 @@ void main() {
   float lightDist = length(lightVec);
   vec3  L         = lightVec / lightDist;
   // jitter by the light's angular radius -> penumbra for free
-  vec3  Lj        = jitterDirection(L, N, u_lightRadius / lightDist, rnd.yx);
-  float shadow    = traceShadow(P + N * eps, Lj, lightDist);
+  /* Two samples, not one. A shadow ray returns 0 or 1, so a single stochastic
+   * test across a penumbra dithers into visible salt-and-pepper that no amount
+   * of antialiasing removes. Two decorrelated samples quarter the variance for
+   * one extra trace, which is the cheapest quality-per-millisecond in the
+   * whole shader. */
+  float spread    = u_lightRadius / lightDist;
+  vec3  Lj        = jitterDirection(L, N, spread, rnd.yx);
+  vec3  Lj2       = jitterDirection(L, N, spread, vec2(1.0 - rnd.y, rnd.x));
+  float shadow    = 0.5 * (traceShadow(P + N * eps, Lj,  lightDist)
+                         + traceShadow(P + N * eps, Lj2, lightDist));
 
   /* ---- 4. reflection ray ------------------------------------------- */
   vec3 lightDir = normalize(u_lightPosition);

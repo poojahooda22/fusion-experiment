@@ -30,6 +30,6 @@ if (mode === 'swirl') {
   await page.mouse.move(1120, 320, { steps: 10 })
 }
 await page.waitForTimeout(350)
-await page.screenshot({ path: out })
+await page.screenshot({ path: out, timeout: 180000 })
 console.log(JSON.stringify({ logs: logs.slice(0, 8) }))
 await browser.close()

@@ -46,7 +46,10 @@ export function Hero({
           flat
           dpr={[1, 2]}
           gl={{
-            antialias: false,
+            // irrelevant while the composer is active (the scene is rasterised
+            // into an offscreen target), but correct for the `raw` preset which
+            // renders straight to the canvas
+            antialias: true,
             powerPreference: 'high-performance',
             alpha: false,
             stencil: false,

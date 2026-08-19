@@ -60,7 +60,7 @@ export function Scene({ palette, preset, onPointerBurst }) {
       {preset.refractionScale > 0 && (
         <RefractionCapture registryRef={registryRef} resolutionScale={preset.refractionScale} />
       )}
-      <Post quality={preset.post} />
+      <Post quality={preset.post} msaa={preset.msaa ?? 4} />
     </>
   )
 }

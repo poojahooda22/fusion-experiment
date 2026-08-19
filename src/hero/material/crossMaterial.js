@@ -65,7 +65,7 @@ export function createCrossMaterial({
       u_selfTransmission: { value: 0.0 },
       // --- lighting / sampling
       u_lightPosition: { value: new THREE.Vector3(6, 9, 6) },
-      u_lightRadius: { value: 1.1 },
+      u_lightRadius: { value: 0.5 },
       u_matcap: { value: matcap },
       u_blueNoiseTexture: { value: blueNoise },
       u_blueNoiseTexelSize: { value: new THREE.Vector2(1 / 64, 1 / 64) },
@@ -76,7 +76,7 @@ export function createCrossMaterial({
       u_resolution: { value: new THREE.Vector2(1, 1) },
       u_ior: { value: 1.32 },
       u_refractionStrength: { value: 0.34 },
-      u_refractionLod: { value: 3.5 },
+      u_refractionLod: { value: 2.2 },
     },
     transparent: false,
     depthWrite: true,
