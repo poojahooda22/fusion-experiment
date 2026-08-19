@@ -19,31 +19,66 @@ vec4 qinverse(vec4 q) {
   return vec4(-q.xyz, q.w);
 }
 
-/* ---- noise -------------------------------------------------------- */
-
-/*
- * Two decorrelated blue-noise samples for this pixel. The offset uniform is
- * advanced by the golden ratio each frame so the sampling pattern rotates and
- * the single-sample error averages out in motion instead of sticking to the
- * screen like fixed grain.
+/* ---- noise -------------------------------------------------------- *
+ *
+ * Note what is NOT here any more: there used to be a blue-noise texture and a
+ * `jitterDirection` helper, used to stochastically sample the shadow penumbra
+ * and the reflection cone at one sample per pixel.
+ *
+ * It was the wrong tool. Blue noise makes a *converging* estimator look good -
+ * it spreads the error evenly so many samples, or many frames, average to the
+ * right answer. But both estimators here are BINARY: a shadow ray returns 0 or
+ * 1, and a reflection ray either hits a neighbour (dark) or escapes to the
+ * environment (bright). One sample of a two-valued function is not a blurry
+ * approximation of it, it is a dither pattern - and the surfaces read as dirty
+ * rather than as rough, with blotches that no amount of antialiasing removes.
+ *
+ * Both are now analytic and smooth by construction: `sphereSoftShadow` for the
+ * shadow, and a roughness fade to `environment()` for the reflection. Cheaper
+ * and completely free of noise. The only remaining texture on the surface is
+ * `microGradient` below, which is deliberate and welded to the object.
  */
-vec2 blueNoise2(sampler2D tex, vec2 fragCoord, vec2 texelSize, vec2 offset) {
-  return texture2D(tex, (fragCoord + offset) * texelSize).rg;
+
+/* ---- stable micro-surface ------------------------------------------ *
+ *
+ * Matte pieces on the reference have a fine flocked texture. The important
+ * word is *fine* - and, crucially, it is a property of the surface, so it
+ * tumbles with the object. Anything driven by gl_FragCoord crawls across the
+ * geometry as it moves and reads as dirt rather than as material, which is
+ * exactly what screen-space jitter was doing here before.
+ *
+ * This is evaluated in LOCAL space and rotated into world space, so a given
+ * speck stays on the same square millimetre of plastic forever.
+ */
+
+float hash31(vec3 p) {
+  p = fract(p * 0.1031);
+  p += dot(p, p.yzx + 33.33);
+  return fract((p.x + p.y) * p.z);
 }
 
-/* Cosine-ish jitter of a direction, used to fake a rough (blurred) reflection
- * from a single ray. `spread` is roughly the tangent of the cone half-angle. */
-vec3 jitterDirection(vec3 dir, vec3 normal, float spread, vec2 rnd) {
-  if (spread <= 0.0) return dir;
-  float phi = rnd.x * 2.0 * PI;
-  float r = sqrt(rnd.y) * spread;
-  vec3 t = normalize(cross(abs(dir.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0), dir));
-  vec3 b = cross(dir, t);
-  vec3 outDir = normalize(dir + (t * cos(phi) + b * sin(phi)) * r);
-  // never let the jitter push the ray below the surface
-  float d = dot(outDir, normal);
-  if (d < 0.0) outDir = normalize(outDir - 2.0 * d * normal);
-  return outDir;
+float valueNoise3(vec3 x) {
+  vec3 i = floor(x);
+  vec3 f = fract(x);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(
+    mix(mix(hash31(i + vec3(0.0, 0.0, 0.0)), hash31(i + vec3(1.0, 0.0, 0.0)), f.x),
+        mix(hash31(i + vec3(0.0, 1.0, 0.0)), hash31(i + vec3(1.0, 1.0, 0.0)), f.x), f.y),
+    mix(mix(hash31(i + vec3(0.0, 0.0, 1.0)), hash31(i + vec3(1.0, 0.0, 1.0)), f.x),
+        mix(hash31(i + vec3(0.0, 1.0, 1.0)), hash31(i + vec3(1.0, 1.0, 1.0)), f.x), f.y),
+    f.z);
+}
+
+/* Gradient of that noise, i.e. the direction the micro-surface tilts. */
+vec3 microGradient(vec3 localPosition, float scale) {
+  vec3 p = localPosition * scale;
+  const float e = 0.85;
+  float n0 = valueNoise3(p);
+  return vec3(
+    valueNoise3(p + vec3(e, 0.0, 0.0)) - n0,
+    valueNoise3(p + vec3(0.0, e, 0.0)) - n0,
+    valueNoise3(p + vec3(0.0, 0.0, e)) - n0
+  );
 }
 
 /* ---- shading helpers ---------------------------------------------- */

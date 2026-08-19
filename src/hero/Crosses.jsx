@@ -51,7 +51,6 @@ const luminance = (c) => 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b
 export function Crosses({
   palette,
   matcap,
-  blueNoise,
   registryRef,
   onPointerBurst,
   count = 52,
@@ -133,7 +132,6 @@ export function Crosses({
       const material = createCrossMaterial({
         frosted: !!spec.recipe.frosted,
         matcap,
-        blueNoise,
       })
       for (const [key, value] of Object.entries(spec.recipe.uniforms)) {
         if (material.uniforms[key]) material.uniforms[key].value = value
@@ -157,7 +155,7 @@ export function Crosses({
         _bestI: new Int32Array(NEIGHBOUR_COUNT),
       }
     })
-  }, [specs, matcap, blueNoise])
+  }, [specs, matcap])
 
   useEffect(() => {
     registryRef.current = items
@@ -181,11 +179,17 @@ export function Crosses({
     bgTarget.current.set(palette.bg)
   }, [palette])
 
-  /* ---- pointer: tap scatters, drag sweeps -------------------------- */
+  /* ---- pointer: move sweeps, tap scatters -------------------------- */
   /*
-   * Two gestures on one pointer. A tap is a one-shot impulse on every body.
-   * A drag is a continuous force on bodies near the cursor, applied every
-   * frame for as long as the button is held.
+   * The cursor is always a hand moving through the cluster - no button
+   * required. Moving the mouse over the canvas pushes the pieces it passes;
+   * a tap is a separate one-shot impulse on every body.
+   *
+   * The force follows the cursor's SPEED, not its presence, so a mouse that
+   * comes to rest stops pushing and the cluster settles back. That is why the
+   * recorded velocity is bled off every frame below: pointermove stops firing
+   * the moment the mouse stops, so a stale velocity would otherwise shove
+   * forever.
    *
    * The drag force cannot live in the move handler: pointermove fires at the
    * mouse's polling rate, which is neither the render rate nor the fixed
@@ -194,7 +198,8 @@ export function Crosses({
    * travelling; the frame loop applies the force against PHYSICS_STEP.
    */
   const drag = useRef({
-    active: false,
+    active: false,     // a button is held (only used to tell a tap from a drag)
+    over: false,       // the cursor is on the canvas - this is what gates force
     x: 0, y: 0,        // cursor on the z=0 plane, world units
     vx: 0, vy: 0,      // world units per second, smoothed
     prevX: 0, prevY: 0, prevT: 0,
@@ -224,11 +229,12 @@ export function Crosses({
 
     const onMove = (event) => {
       const d = drag.current
-      if (!d.active) return
       const p = toPlane(event)
       if (!p) return
+      d.over = true
 
-      if (!d.moved && Math.hypot(event.clientX - d.downX, event.clientY - d.downY) > TAP_SLOP) {
+      if (d.active && !d.moved &&
+          Math.hypot(event.clientX - d.downX, event.clientY - d.downY) > TAP_SLOP) {
         d.moved = true
       }
 
@@ -245,9 +251,15 @@ export function Crosses({
       d.hasPrev = true
     }
 
+    /* Ends the BUTTON gesture only. The hover sweep is independent and keeps
+       running, so letting go mid-move does not stall the cluster. */
     const endDrag = () => {
+      drag.current.active = false
+    }
+
+    const onLeave = () => {
       const d = drag.current
-      d.active = false; d.hasPrev = false; d.vx = 0; d.vy = 0
+      d.over = false; d.hasPrev = false; d.vx = 0; d.vy = 0
     }
 
     const burst = (centre) => {
@@ -307,6 +319,7 @@ export function Crosses({
     el.addEventListener('pointermove', onMove)
     el.addEventListener('pointerup', onUp)
     el.addEventListener('pointercancel', endDrag)
+    el.addEventListener('pointerleave', onLeave)
     /* A button released outside the window never sends pointerup here. */
     window.addEventListener('blur', endDrag)
     return () => {
@@ -314,16 +327,28 @@ export function Crosses({
       el.removeEventListener('pointermove', onMove)
       el.removeEventListener('pointerup', onUp)
       el.removeEventListener('pointercancel', endDrag)
+      el.removeEventListener('pointerleave', onLeave)
       window.removeEventListener('blur', endDrag)
     }
   }, [gl, camera, raycaster, items, onPointerBurst])
 
   /* ---- per-frame: forces, colour lerp, neighbour solve -------------- */
-  const noiseOffset = useRef(new THREE.Vector2())
 
   useFrame((state, rawDelta) => {
     const dt = PHYSICS_STEP
     const t = state.clock.elapsedTime
+
+    /* Bleed the cursor velocity toward zero on a wall-clock time constant.
+       pointermove stops firing the instant the mouse stops, so without this
+       the last recorded velocity would keep pushing for ever. rawDelta, not
+       the fixed physics dt, so the fade is the same at any frame rate. */
+    const dr = drag.current
+    const fade = Math.exp(-Math.min(rawDelta, 0.1) / 0.09)
+    dr.vx *= fade
+    dr.vy *= fade
+    /* Force follows SPEED: a resting cursor pushes nothing, a moving one
+       parts the cluster in proportion to how fast it travels. */
+    const dragGain = dr.over ? Math.min(Math.hypot(dr.vx, dr.vy) / 1.5, 1) : 0
 
     /* Spring each body toward its own slowly wandering home slot. */
     const HOME_DRIFT = 0.42
@@ -348,8 +373,7 @@ export function Crosses({
          the direction of travel carries pieces with it; a radial push parts
          them around it so they do not pile up on the leading edge. Both fall
          off with distance, so only the local neighbourhood reacts. */
-      const dr = drag.current
-      if (dr.active) {
+      if (dragGain > 0.002) {
         const rx = p.x - dr.x
         const ry = p.y - dr.y
         /* z squashed: the cursor is a point on a plane but the cluster is a
@@ -362,10 +386,12 @@ export function Crosses({
              springs can recover from. */
           fx += clamp(dr.vx, -DRAG_MAX_SPEED, DRAG_MAX_SPEED) * DRAG_SWEEP * w
           fy += clamp(dr.vy, -DRAG_MAX_SPEED, DRAG_MAX_SPEED) * DRAG_SWEEP * w
-          const inv = 1 / Math.max(rr, 0.3)
-          fx += rx * inv * DRAG_PUSH * w
-          fy += ry * inv * DRAG_PUSH * w
-          fz += p.z * inv * DRAG_PUSH * w * 0.5
+          /* The parting push is scaled by speed too, so a cursor left sitting
+             in the cluster does not slowly hollow out a permanent crater. */
+          const inv = (1 / Math.max(rr, 0.3)) * DRAG_PUSH * dragGain
+          fx += rx * inv * w
+          fy += ry * inv * w
+          fz += p.z * inv * w * 0.5
         }
       }
 
@@ -392,10 +418,6 @@ export function Crosses({
     /* colour + background easing */
     const ease = 1 - Math.exp(-rawDelta * 5.0)
     bgCurrent.current.lerp(bgTarget.current, ease)
-    noiseOffset.current.set(
-      (noiseOffset.current.x + 13.0) % 64.0,
-      (noiseOffset.current.y + 29.0) % 64.0
-    )
 
     for (const item of items) {
       item.color.lerp(item.targetColor, ease)
@@ -404,7 +426,6 @@ export function Crosses({
       u.u_color.value.copy(item.color)
       u.u_bgColor.value.copy(bgCurrent.current)
       u.u_time.value = t
-      u.u_blueNoiseCoordOffset.value.copy(noiseOffset.current)
     }
 
     if (state.scene.background) state.scene.background.copy(bgCurrent.current)

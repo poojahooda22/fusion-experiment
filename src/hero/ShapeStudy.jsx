@@ -5,7 +5,6 @@ import { buildCrossGeometry } from './lib/crossGeometry.js'
 import { CROSS_BOUND } from './lib/crossSDF.js'
 import { createCrossMaterial } from './material/crossMaterial.js'
 import { makeMatcapTexture } from './lib/matcap.js'
-import { makeBlueNoiseTexture } from './lib/blueNoise.js'
 
 /**
  * ?debug=shape — three fixed orientations of a single cross, big, so the
@@ -20,12 +19,11 @@ const VIEWS = [
 export function ShapeStudy({ resolution = 64 }) {
   const geometry = useMemo(() => buildCrossGeometry({ resolution }), [resolution])
   const matcap = useMemo(() => makeMatcapTexture(256), [])
-  const blueNoise = useMemo(() => makeBlueNoiseTexture(64), [])
 
   const materials = useMemo(
     () =>
       VIEWS.map((v) => {
-        const m = createCrossMaterial({ matcap, blueNoise, color: v.color })
+        const m = createCrossMaterial({ matcap, color: v.color })
         m.uniforms.u_roughness.value = 0.12
         m.uniforms.u_specular.value = 1.2
         m.uniforms.u_exposure.value = 0.9
@@ -33,7 +31,7 @@ export function ShapeStudy({ resolution = 64 }) {
         m.uniforms.u_selfPositionRadius.value.set(0, 0, 0, CROSS_BOUND)
         return m
       }),
-    [matcap, blueNoise]
+    [matcap]
   )
 
   return (

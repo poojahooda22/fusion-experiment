@@ -31,7 +31,7 @@ import { OilWater } from '../oilwater/OilWater.jsx'
  * Removing it is also a straight speedup: it was eight fullscreen passes.
  * `<Post dof />` puts it back with sane values if the look is ever wanted.
  */
-export function Post({ quality = 'high', msaa = 4, oilWater = true, dof = false }) {
+export function Post({ quality = 'high', msaa = 4, oilWater = false, dof = false }) {
   if (quality === 'off') return null
 
   return (
@@ -51,7 +51,10 @@ export function Post({ quality = 'high', msaa = 4, oilWater = true, dof = false 
         radius={0.5}
       />
       <ToneMapping mode={ToneMappingMode.ACES_FILMIC} />
-      {/* after tone mapping: the oil film distorts the finished image */}
+      {/* After tone mapping: the oil film distorts the finished image - which
+          means it distorts the crosses too, by design. Off by default so the
+          material can be judged on its own; turn it on with <Post oilWater />
+          or ?oil=1. */}
       {oilWater ? <OilWater /> : <></>}
       <Noise premultiply blendFunction={BlendFunction.OVERLAY} opacity={0.016} />
       <Vignette offset={0.32} darkness={0.42} blendFunction={BlendFunction.NORMAL} />

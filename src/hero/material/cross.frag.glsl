@@ -40,11 +40,10 @@ uniform float u_selfTransmission;   // how much light passes through *this* obje
 
 /* --- lighting / sampling ------------------------------------------- */
 uniform vec3      u_lightPosition;
-uniform float     u_lightRadius;
+uniform float     u_shadowSoftness;   // larger = tighter penumbra
 uniform sampler2D u_matcap;
-uniform sampler2D u_blueNoiseTexture;
-uniform vec2      u_blueNoiseTexelSize;
-uniform vec2      u_blueNoiseCoordOffset;
+uniform float     u_microTexture;     // strength of the stable surface grain
+uniform float     u_microScale;       // grain frequency, in local units
 uniform float     u_time;
 
 #ifdef FROSTED
@@ -53,6 +52,7 @@ uniform vec2      u_resolution;
 uniform float     u_ior;
 uniform float     u_refractionStrength;
 uniform float     u_refractionLod;
+uniform float     u_refractionSpread;
 #endif
 
 /* ------------------------------------------------------------------ *
@@ -83,7 +83,11 @@ float traceNeighbourhood(vec3 ro, vec3 rd, out vec3 hitNormal, out vec3 hitColor
     vec3 ld = qrotate(qinverse(q), rd);
     vec3 n;
     float t = intersectCross(lo, ld, pr.w * u_armRatio.x * 0.78, pr.w * u_armRatio.y * 0.88, n);
-    if (t > 0.0 && t < best) {
+    /* Ignore very near self hits. A ray leaving the side of an arm travels
+     * almost tangentially and can clip back into the same cylinder a short way
+     * along, which drew a thin dark hairline down every arm. Genuine
+     * arm-to-arm reflection happens at roughly half a radius and beyond. */
+    if (t > pr.w * 0.22 && t < best) {
       best = t;
       hitNormal = qrotate(q, n);
       hitColor  = u_color;
@@ -111,33 +115,27 @@ float traceNeighbourhood(vec3 ro, vec3 rd, out vec3 hitNormal, out vec3 hitColor
   return best < 1e18 ? best : -1.0;
 }
 
-/* Any-hit visibility toward the light, accumulating transmission so that a
- * frosted neighbour throws a lighter shadow than an opaque one. */
-float traceShadow(vec3 ro, vec3 rd, float maxT) {
+/*
+ * Visibility toward the key light.
+ *
+ * This deliberately does NOT trace. A traced shadow ray returns 0 or 1, so
+ * covering a penumbra means sampling it stochastically, and one or two samples
+ * per pixel dither into blotchy salt-and-pepper that antialiasing cannot touch
+ * - it was the single biggest source of "dirty" looking surfaces here.
+ *
+ * The analytic sphere shadow is smooth by construction, exact for a sphere,
+ * costs one sqrt per neighbour instead of three cylinder intersections, and
+ * the crosses' own arm-on-arm shadowing is already baked into aAo.
+ */
+float neighbourShadow(vec3 p, vec3 lightDir) {
   float vis = 1.0;
-
-  {
-    vec4 pr = u_selfPositionRadius;
-    vec4 qi = qinverse(u_selfRotation);
-    vec3 n;
-    float t = intersectCross(qrotate(qi, ro - pr.xyz), qrotate(qi, rd),
-                             pr.w * u_armRatio.x * 0.78, pr.w * u_armRatio.y * 0.88, n);
-    if (t > 0.0 && t < maxT) vis *= u_selfTransmission;
-  }
-
   for (int i = 0; i < NEIGHBOUR_COUNT; i++) {
     vec4 pr = u_nearPositionRadiusList[i];
     if (pr.w <= 0.0) continue;
-    if (vis < 0.01) break;
-    if (!boundingSphereHit(ro, rd, pr.xyz, pr.w, maxT)) continue;
-
-    vec4 qi = qinverse(u_nearRotationList[i]);
-    vec3 n;
-    float t = intersectCross(qrotate(qi, ro - pr.xyz), qrotate(qi, rd),
-                             pr.w * u_armRatio.x, pr.w * u_armRatio.y, n);
-    if (t > 0.0 && t < maxT) vis *= u_nearTransparencyLumaList[i].x;
+    // the cross fills roughly 60% of its bounding sphere
+    float s = sphereSoftShadow(p, lightDir, vec4(pr.xyz, pr.w * 0.6), u_shadowSoftness);
+    vis *= mix(s, 1.0, u_nearTransparencyLumaList[i].x);
   }
-
   return vis;
 }
 
@@ -167,61 +165,62 @@ vec3 shadeReflectionHit(vec3 albedo, vec3 n, vec3 rd, vec3 lightDir) {
 /* ------------------------------------------------------------------ */
 
 void main() {
-  vec3 N = normalize(vWorldNormal);
-  if (!gl_FrontFacing) N = -N;
+  vec3 N  = normalize(vWorldNormal);
+  vec3 vn = normalize(vViewNormal);
+  if (!gl_FrontFacing) { N = -N; vn = -vn; }
 
   vec3  P     = vWorldPosition;
-  vec3  V     = normalize(cameraPosition - P);
-  float ndv   = saturate1(dot(N, V));
   float scale = u_selfPositionRadius.w;
   float eps   = scale * 0.055;
 
-  vec2 rnd = blueNoise2(u_blueNoiseTexture, gl_FragCoord.xy,
-                        u_blueNoiseTexelSize, u_blueNoiseCoordOffset);
+  /* ---- 0. stable micro-surface -------------------------------------
+   * Evaluated in local space and rotated into world space, so the grain is
+   * welded to the plastic and tumbles with it. Applied to BOTH the world
+   * normal (reflections, shadow) and the view normal (matcap), or the body
+   * shading would stay glassy while only the reflections got texture.      */
+  if (u_microTexture > 0.0) {
+    vec3 g = qrotate(u_selfRotation, microGradient(vLocalPosition, u_microScale));
+    g -= N * dot(g, N);                       // tangential component only
+    N  = normalize(N + g * u_microTexture);
+    vn = normalize(vn + (viewMatrix * vec4(g, 0.0)).xyz * u_microTexture);
+  }
+
+  vec3  V   = normalize(cameraPosition - P);
+  float ndv = saturate1(dot(N, V));
 
   /* ---- 1. base shading from the baked studio matcap ---------------- */
-  vec3  vn  = normalize(vViewNormal);
-  vec4  mc  = texture2D(u_matcap, vn.xy * 0.5 + 0.5);
+  vec4 mc = texture2D(u_matcap, vn.xy * 0.5 + 0.5);
 
   /* ---- 2. occlusion ------------------------------------------------ */
   vec3  bleed;
   float ao = neighbourOcclusion(P, N, bleed) * mix(1.0, vAo, 0.9);
 
-  /* ---- 3. shadow ray toward the key light -------------------------- */
+  /* ---- 3. shadow --------------------------------------------------- */
   vec3  lightVec  = u_lightPosition - P;
   float lightDist = length(lightVec);
   vec3  L         = lightVec / lightDist;
-  // jitter by the light's angular radius -> penumbra for free
-  /* Two samples, not one. A shadow ray returns 0 or 1, so a single stochastic
-   * test across a penumbra dithers into visible salt-and-pepper that no amount
-   * of antialiasing removes. Two decorrelated samples quarter the variance for
-   * one extra trace, which is the cheapest quality-per-millisecond in the
-   * whole shader. */
-  float spread    = u_lightRadius / lightDist;
-  vec3  Lj        = jitterDirection(L, N, spread, rnd.yx);
-  vec3  Lj2       = jitterDirection(L, N, spread, vec2(1.0 - rnd.y, rnd.x));
-  float shadow    = 0.5 * (traceShadow(P + N * eps, Lj,  lightDist)
-                         + traceShadow(P + N * eps, Lj2, lightDist));
+  float shadow    = neighbourShadow(P + N * eps, L);
 
-  /* ---- 4. reflection ray ------------------------------------------- */
-  vec3 lightDir = normalize(u_lightPosition);
-  vec3 R  = reflect(-V, N);
-  vec3 Rj = jitterDirection(R, N, u_roughness * 0.32, rnd);
+  /* ---- 4. reflection ----------------------------------------------- *
+   * One deterministic ray. There is no jitter anywhere: a stochastic ray
+   * flips between "hit a neighbour" (dark) and "escaped to the environment"
+   * (bright) from pixel to pixel, which is a two-tone dither, not a blur.
+   * Instead the traced sample is faded out entirely as roughness rises, so a
+   * matte surface is lit purely by the smooth analytic environment and carries
+   * no sampling artefacts at all.                                          */
+  vec3  lightDir = normalize(u_lightPosition);
+  float mirrorness = 1.0 - smoothstep(0.05, 0.26, u_roughness);
 
-  vec3  hitNormal, hitColor;
-  float rt = traceNeighbourhood(P + N * eps, Rj, hitNormal, hitColor);
-  vec3  reflection = rt > 0.0
-      ? shadeReflectionHit(hitColor, hitNormal, Rj, L)
-      : environment(Rj, lightDir, u_bgColor);
-
-  /* One traced sample is plenty for a mirror, but on a rough surface the
-   * hit/miss decision flips from pixel to pixel and reads as salt and pepper.
-   * A rough reflection converges to the average of its cone anyway, so fade the
-   * noisy sample out entirely as roughness rises: by 0.5 the surface is lit
-   * purely by the smooth analytic environment and carries no sampling noise at
-   * all. One extra environment() call instead of N extra rays.               */
-  reflection = mix(reflection, environment(N, lightDir, u_bgColor),
-                   smoothstep(0.12, 0.5, u_roughness));
+  vec3 reflection = environment(reflect(-V, N), lightDir, u_bgColor);
+  if (mirrorness > 0.0) {
+    vec3  hitNormal, hitColor;
+    vec3  R  = reflect(-V, N);
+    float rt = traceNeighbourhood(P + N * eps, R, hitNormal, hitColor);
+    vec3  traced = rt > 0.0
+        ? shadeReflectionHit(hitColor, hitNormal, R, L)
+        : environment(R, lightDir, u_bgColor);
+    reflection = mix(reflection, traced, mirrorness);
+  }
 
   float fres       = fresnelSchlick(ndv, 0.045);
   float reflAmount = mix(fres, 1.0, u_metalness) * u_reflectivity * mix(1.0, 0.16, u_roughness);
@@ -255,11 +254,16 @@ void main() {
     vec2 uvScreen = gl_FragCoord.xy / u_resolution;
     vec2 uvR      = uvScreen + refrView.xy * u_refractionStrength * (1.0 - ndv * 0.45);
 
-    vec2 j = (rnd - 0.5) * 0.0025;
+    // a fixed cross-shaped tap pattern, not a jittered one: random offsets
+    // here produced exactly the same two-tone dither as the shadow rays did
+    vec2 j = vec2(u_refractionSpread, 0.0);
+    vec2 k = vec2(0.0, u_refractionSpread);
     vec3 behind =
-        texture2DLodEXT(u_refractionTexture, clamp(uvR,     vec2(0.003), vec2(0.997)), u_refractionLod).rgb * 0.5 +
-        texture2DLodEXT(u_refractionTexture, clamp(uvR + j, vec2(0.003), vec2(0.997)), u_refractionLod).rgb * 0.25 +
-        texture2DLodEXT(u_refractionTexture, clamp(uvR - j, vec2(0.003), vec2(0.997)), u_refractionLod).rgb * 0.25;
+        texture2DLodEXT(u_refractionTexture, clamp(uvR,     vec2(0.003), vec2(0.997)), u_refractionLod).rgb * 0.4 +
+        texture2DLodEXT(u_refractionTexture, clamp(uvR + j, vec2(0.003), vec2(0.997)), u_refractionLod).rgb * 0.15 +
+        texture2DLodEXT(u_refractionTexture, clamp(uvR - j, vec2(0.003), vec2(0.997)), u_refractionLod).rgb * 0.15 +
+        texture2DLodEXT(u_refractionTexture, clamp(uvR + k, vec2(0.003), vec2(0.997)), u_refractionLod).rgb * 0.15 +
+        texture2DLodEXT(u_refractionTexture, clamp(uvR - k, vec2(0.003), vec2(0.997)), u_refractionLod).rgb * 0.15;
 
     behind *= mix(vec3(1.0), albedo, 0.7);
     behind *= mix(0.55, 1.0, ao);

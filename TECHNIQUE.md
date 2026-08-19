@@ -232,14 +232,12 @@ what lets the same texture serve glossy plastic and matte rubber.
 **Occlusion.** `neighbourOcclusion(P, N)` × the baked `aAo`. Runtime contact
 shading times static crevice shading.
 
-**Shadow.** One ray toward the key light. The ray direction is jittered by the
-light's angular radius (`u_lightRadius / lightDist`) using blue noise, which
-buys a penumbra for the price of a hard shadow. Transmission accumulates
-multiplicatively, so a frosted neighbour casts a lighter shadow than an opaque
-one — that is what `u_nearTransparencyLumaList.x` is for.
+**Shadow.** Analytic, not traced — see below. `sphereSoftShadow` against each
+neighbour's bounding sphere, multiplied together, with transmission mixed in so
+a frosted neighbour casts a lighter shadow than an opaque one (that is what
+`u_nearTransparencyLumaList.x` is for).
 
-**Reflection.** One ray, `reflect(-V, N)`, jittered inside a cone whose width is
-`u_roughness`. Hit → shade the neighbour's albedo with a cheap lambert + rim so
+**Reflection.** One deterministic ray, `reflect(-V, N)`. Hit → shade the neighbour's albedo with a cheap lambert + rim so
 the reflection shows *form* rather than a flat colour patch. Miss → the
 analytic `environment()` function: a vertical gradient tinted by `u_bgColor`
 plus a tight `pow(dot(dir, lightDir), 900)` disc for the key light. That disc
@@ -258,18 +256,61 @@ One extra `environment()` call, versus N extra rays. The same reasoning
 governs `u_lightRadius`: a wide penumbra means a noisy binary shadow test, so
 it is kept at ~1.1 world units rather than the 2+ that would look softer.
 
-Note the shader traces **itself** first, with the proxy shrunk to 92 % and the
-ray origin pushed `0.055 × scale` along the normal. Without it the arms do not
-reflect or shadow each other and the object reads as hollow.
+Note the shader traces **itself** first, with the ray origin pushed
+`0.055 × scale` along the normal, the proxy shrunk (78 % in length, 88 % in
+radius — see §9b for why the length matters so much more), and near hits below
+`0.22 × radius` ignored so a ray leaving the side of an arm cannot clip back
+into the cylinder it just left. Without the self trace the arms do not reflect
+each other and the object reads as hollow.
 
-**Blue noise.** `lib/blueNoise.js` runs void-and-cluster (Ulichney 1993) at
-64×64 in ~70 ms: relax a random binary pattern by repeatedly moving the
-tightest cluster into the largest void, then rank every pixel in three phases.
-The result has a flat histogram and *negative* nearest-neighbour correlation —
-the definition of blue noise. White noise here would look like TV static;
-blue noise spreads the single-sample error so evenly that it reads as a smooth
-blur. `u_blueNoiseCoordOffset` advances every frame so the residual animates
-and the eye integrates it away.
+**No stochastic sampling anywhere — and that is the single biggest thing that
+separates a clean surface from a dirty one here.**
+
+The first version of this shader sampled both the shadow penumbra and the
+reflection cone stochastically, jittered by a void-and-cluster blue-noise
+texture, at one sample per pixel. That is standard practice and it was the
+wrong call, for a reason worth stating plainly:
+
+> Blue noise makes a *converging* estimator look good. It spreads the error
+> evenly so that many samples — or many frames — average to the right answer.
+> But both estimators here are **binary**. A shadow ray returns 0 or 1. A
+> reflection ray either hits a neighbour (dark) or escapes to the environment
+> (bright). One sample of a two-valued function is not a blurry approximation
+> of that function; it is a **dither pattern**.
+
+The result was blotchy, patchy surfaces that looked like dirt rather than like
+roughness, and no amount of antialiasing touched it — MSAA resolves geometric
+coverage, not shading variance. Two samples instead of one only halved the
+amplitude and added a third grey level.
+
+Both estimators are now analytic and smooth by construction:
+
+* **Shadow** — `sphereSoftShadow`, iq's exact soft shadow for a sphere. One
+  `sqrt` and a `smoothstep` per neighbour, against the same bounding sphere the
+  occlusion term uses. Smooth by construction, and *cheaper* than the traced
+  version it replaced (which cost three cylinder intersections per neighbour,
+  twice). Arm-on-arm self shadowing is already baked into `aAo`, so nothing is
+  lost.
+* **Reflection** — one deterministic ray, no jitter at all, faded out entirely
+  as roughness rises (`1 - smoothstep(0.05, 0.26, roughness)`). A mirror gets a
+  crisp traced reflection; anything matte is lit purely by the smooth analytic
+  `environment()`. There is no in-between where a single sample has to stand in
+  for a wide lobe.
+
+The blue-noise generator has been deleted along with the jitter it fed.
+
+**Micro-surface, and why it is in object space.** Matte pieces on the reference
+have a fine flocked texture, and with all the sampling noise gone the matte
+materials read as bare plastic without it. It is supplied as a *material*
+property: a value-noise gradient evaluated at `vLocalPosition`, rotated into
+world space by the instance quaternion, and added to both the world normal and
+the view normal (perturbing only the world normal leaves the matcap body
+shading glassy while the reflections alone acquire texture).
+
+Object space is the whole point. Anything driven by `gl_FragCoord` crawls
+across the geometry as the piece tumbles and reads as dirt on the lens; this
+way a given speck stays on the same square millimetre of plastic forever.
+Strength runs from 0 on the glossy recipes to 0.13 on the black rubber.
 
 **Subsurface scattering.** Wrapped back-lighting × `(1 - aThickness)`, tinted by
 `u_sssColor`. Only the thin tube walls glow.
@@ -510,8 +551,8 @@ Measured at 1204×710, `quality=high`, 28 crosses:
 | meshes | 28, one draw call each, one shared geometry; the crosses compile 2 programs (opaque + frosted) |
 | triangles | 31 496 per cross at resolution 72, ~880 k per pass, ×2 passes with refraction on |
 | antialiasing | 4× MSAA on the composer (2× on the `low` preset) |
-| fragment work | per pixel: 2 rays × (8 sphere rejects + ~3 surviving × 3 cylinder tests) + 8 analytic sphere occlusions |
-| startup | ~256 ms geometry + ~70 ms blue noise + ~10 ms matcap |
+| fragment work | per pixel: 1 reflection ray (glossy only) × (8 sphere rejects + ~3 surviving × 3 cylinder tests), 8 analytic soft shadows, 8 analytic sphere occlusions, 4 value-noise taps on matte |
+| startup | ~256 ms geometry + ~10 ms matcap |
 | textures | 30 (mostly the post chain's) |
 
 The effect is fragment-bound, and `NEIGHBOUR_COUNT` is the exponent. In order of
@@ -519,7 +560,7 @@ what to cut when it is slow:
 
 1. `multisampling` 4 → 2 → 0 (memory and bandwidth, not shader time)
 2. the refraction pre-pass — halves the vertex work
-3. the second shadow sample in `cross.frag.glsl`
+3. `u_microTexture` → 0 on the matte recipes (4 value-noise taps)
 4. `NEIGHBOUR_COUNT` 8 → 6
 5. cross count
 6. marching cubes resolution

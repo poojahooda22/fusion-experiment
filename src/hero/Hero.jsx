@@ -10,6 +10,11 @@ export function Hero({
   quality,
 }) {
   const [resolvedQuality] = useState(() => quality ?? detectQuality())
+  const [oilWater] = useState(
+    () =>
+      typeof window !== 'undefined' &&
+      new URLSearchParams(window.location.search).get('oil') === '1'
+  )
   const preset = QUALITY_PRESETS[resolvedQuality] ?? QUALITY_PRESETS.high
   const [paletteIndex, setPaletteIndex] = useState(0)
   const palette = PALETTES[paletteIndex]
@@ -56,11 +61,16 @@ export function Hero({
           }}
           camera={{ position: [0, 0, preset.cameraZ], fov: 46, near: 0.1, far: 60 }}
         >
-          <Scene palette={palette} preset={preset} onPointerBurst={cyclePalette} />
+          <Scene
+            palette={palette}
+            preset={preset}
+            onPointerBurst={cyclePalette}
+            oilWater={oilWater}
+          />
         </Canvas>
 
         <div className="hero__hint">
-          <span>MOVE TO SMEAR &middot; CLICK TO SCATTER</span>
+          <span>MOVE TO PUSH &middot; CLICK TO SCATTER</span>
           <span className="hero__swatch" style={{ background: palette.accent }} />
           <span>{palette.name}</span>
         </div>

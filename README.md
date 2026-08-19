@@ -6,9 +6,11 @@ material that ray-traces each object's nearest neighbours in the fragment
 shader to get reflections, contact shadows, occlusion and colour bleeding.
 Click anywhere in the box to shove the cluster and cycle the palette.
 
-Move the pointer and an oil-on-water slick follows it, bending and dispersing
-the finished frame — a second, independent effect built on a shared
-screen-space fluid buffer.
+Move the pointer with `?oil=1` and an oil-on-water slick follows it, bending
+and dispersing the finished frame — a second, independent effect built on a
+shared screen-space fluid buffer. It is **off by default**: it is a full-screen
+post pass, so it distorts the crosses along with everything else, and that gets
+in the way of judging the material.
 
 Two write-ups sit next to this file:
 
@@ -50,6 +52,7 @@ because the post chain does the tone mapping.
 | --- | --- |
 | `?quality=raw` | full scene, post chain off — the quickest way to see what the material alone does |
 | `?quality=low` | 16 crosses, coarser mesh, no refraction pass, 2× MSAA |
+| `?oil=1` | enables the oil-on-water cursor layer (off by default — it distorts the crosses, by design) |
 | `?stats=1` | exposes the R3F state as `window.__hero` for `__hero.gl.info` |
 | `?debug=shape` | the cross on its own at three fixed orientations, for measuring the silhouette |
 
@@ -86,7 +89,6 @@ src/oilwater/
     crossSDF.js             signed distance field for the jack shape
     crossGeometry.js        marching cubes + baked AO / SSS thickness
     matcap.js               procedural studio matcap (RGB diffuse, A specular)
-    blueNoise.js            void-and-cluster blue noise
     neighbours.js           per-frame k-nearest-neighbour solve
   material/
     crossMaterial.js        ShaderMaterial factory + uniform layout
@@ -101,6 +103,8 @@ src/oilwater/
 | where | what |
 | --- | --- |
 | `quality.js` → `msaa` | 4 is the reason the edges are sharp. Dropping it to 0 undoes most of it |
+| `palettes.js` → `u_microTexture` | the flocked grain on matte pieces; 0 on anything glossy |
+| `crossMaterial.js` → `u_shadowSoftness` | penumbra tightness of the analytic shadow |
 | `material/crossMaterial.js` → `NEIGHBOUR_COUNT` | 8 is the sweet spot. 4 loses obvious reflections, 12 costs ~40% more fragment time |
 | `palettes.js` → `RECIPES[].weight` | the mix of glossy / rubber / frosted pieces |
 | `palettes.js` → `PALETTES` | add or reorder the click-through colours |

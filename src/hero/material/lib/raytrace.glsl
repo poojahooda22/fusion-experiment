@@ -105,6 +105,26 @@ bool boundingSphereHit(vec3 ro, vec3 rd, vec3 centre, float radius, float best) 
 }
 
 /*
+ * iq's analytic soft shadow for a sphere.
+ *
+ * Returns a SMOOTH 0..1 visibility instead of a binary hit test, which is the
+ * whole point: a traced shadow ray returns 0 or 1, so sampling a penumbra
+ * stochastically dithers into salt-and-pepper that survives any amount of
+ * antialiasing. This is one sqrt and a smoothstep, it is exact for a sphere,
+ * and it is completely free of noise.
+ *
+ * `k` is the softness: larger = tighter penumbra.
+ */
+float sphereSoftShadow(vec3 ro, vec3 rd, vec4 sph, float k) {
+  vec3 oc = sph.xyz - ro;
+  float b = dot(oc, rd);
+  if (b <= 0.0) return 1.0;                       // occluder is behind us
+  float h = dot(oc, oc) - b * b - sph.w * sph.w;
+  if (h <= 0.0) return 0.0;                       // ray passes through it
+  return smoothstep(0.0, 1.0, k * sqrt(h) / b);
+}
+
+/*
  * iq's exact analytic sphere occlusion. Used to darken a surface by the
  * neighbours hovering over it - this is what makes crosses look like they are
  * actually touching instead of floating in front of each other.

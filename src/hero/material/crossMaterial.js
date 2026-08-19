@@ -25,7 +25,6 @@ const emptyVec4Array = (n, w = 0) =>
 export function createCrossMaterial({
   frosted = false,
   matcap,
-  blueNoise,
   color = '#ffffff',
   bgColor = '#0a0a0a',
 } = {}) {
@@ -61,15 +60,18 @@ export function createCrossMaterial({
       u_sssColor: { value: new THREE.Color('#ffffff') },
       u_aoStrength: { value: 0.85 },
       u_exposure: { value: 1.02 },
+      /* Stable, object-space surface grain. Matte pieces on the reference have
+       * a fine flocked texture; this supplies it as a material property rather
+       * than as screen-space noise, so it tumbles with the piece. */
+      u_microTexture: { value: 0.0 },
+      u_microScale: { value: 95.0 },
       u_opacity: { value: 1.0 },
       u_selfTransmission: { value: 0.0 },
-      // --- lighting / sampling
+      // --- lighting
       u_lightPosition: { value: new THREE.Vector3(6, 9, 6) },
-      u_lightRadius: { value: 0.5 },
+      // penumbra tightness for the analytic sphere shadow; larger = harder
+      u_shadowSoftness: { value: 5.0 },
       u_matcap: { value: matcap },
-      u_blueNoiseTexture: { value: blueNoise },
-      u_blueNoiseTexelSize: { value: new THREE.Vector2(1 / 64, 1 / 64) },
-      u_blueNoiseCoordOffset: { value: new THREE.Vector2() },
       u_time: { value: 0 },
       // --- refraction (frosted only, but harmless when unused)
       u_refractionTexture: { value: null },
@@ -77,6 +79,7 @@ export function createCrossMaterial({
       u_ior: { value: 1.32 },
       u_refractionStrength: { value: 0.34 },
       u_refractionLod: { value: 2.2 },
+      u_refractionSpread: { value: 0.004 },
     },
     transparent: false,
     depthWrite: true,

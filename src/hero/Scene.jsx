@@ -8,9 +8,8 @@ import { CameraRig } from './CameraRig.jsx'
 import { RefractionCapture } from './RefractionCapture.jsx'
 import { Post } from './Post.jsx'
 import { makeMatcapTexture } from './lib/matcap.js'
-import { makeBlueNoiseTexture } from './lib/blueNoise.js'
 
-export function Scene({ palette, preset, onPointerBurst }) {
+export function Scene({ palette, preset, onPointerBurst, oilWater = false }) {
   const registryRef = useRef([])
   const scene = useThree((s) => s.scene)
 
@@ -23,18 +22,16 @@ export function Scene({ palette, preset, onPointerBurst }) {
   }, [three])
 
   const matcap = useMemo(() => makeMatcapTexture(256), [])
-  const blueNoise = useMemo(() => makeBlueNoiseTexture(64), [])
 
   useEffect(() => {
     scene.background = new THREE.Color(palette.bg)
     return () => {
       scene.background = null
       matcap.dispose()
-      blueNoise.dispose()
     }
     // palette.bg is only the *initial* value; Crosses eases it every frame
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scene, matcap, blueNoise])
+  }, [scene, matcap])
 
   return (
     <>
@@ -49,7 +46,6 @@ export function Scene({ palette, preset, onPointerBurst }) {
         <Crosses
           palette={palette}
           matcap={matcap}
-          blueNoise={blueNoise}
           registryRef={registryRef}
           onPointerBurst={onPointerBurst}
           count={preset.count}
@@ -60,7 +56,7 @@ export function Scene({ palette, preset, onPointerBurst }) {
       {preset.refractionScale > 0 && (
         <RefractionCapture registryRef={registryRef} resolutionScale={preset.refractionScale} />
       )}
-      <Post quality={preset.post} msaa={preset.msaa ?? 4} />
+      <Post quality={preset.post} msaa={preset.msaa ?? 4} oilWater={oilWater} />
     </>
   )
 }

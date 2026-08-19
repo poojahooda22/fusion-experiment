@@ -6,6 +6,11 @@ a petrol rainbow. It is not a material on any one object — it is a page-level
 post pass fed by a persistent screen-space fluid buffer, which is why it works
 over the hero, over images, over text, over everything at once.
 
+**It ships off by default** (`?oil=1`, or `<Post oilWater />`). That is not a
+bug workaround — it is a full-screen post pass, so by construction it bends the
+crosses along with everything else, and while you are judging the material that
+is just in the way.
+
 Same structure as `TECHNIQUE.md`: section 1 is what I read off the live site,
 the rest is the rebuild.
 
