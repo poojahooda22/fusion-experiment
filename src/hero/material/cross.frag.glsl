@@ -164,6 +164,10 @@ vec3 shadeReflectionHit(vec3 albedo, vec3 n, vec3 rd, vec3 lightDir) {
 
 /* ------------------------------------------------------------------ */
 
+/* How much of the flock survives where no light rakes across the surface.
+   0.0 = perfectly smooth in shadow, 1.0 = the old constant-amplitude grain. */
+#define MICRO_SHADOW_FLOOR 0.10
+
 void main() {
   vec3 N  = normalize(vWorldNormal);
   vec3 vn = normalize(vViewNormal);
@@ -173,16 +177,58 @@ void main() {
   float scale = u_selfPositionRadius.w;
   float eps   = scale * 0.055;
 
-  /* ---- 0. stable micro-surface -------------------------------------
+  /* ---- 0. occlusion + shadow, from the SMOOTH normal -----------------
+   * Both are broad geometric terms that depend on where the piece sits, not
+   * on its micro-relief, so they are computed before the grain is applied.
+   * Taking them first is what lets the grain below be scaled by how much
+   * light this point actually receives. Using the un-perturbed normal for
+   * the shadow ray origin is also strictly more correct: a fraction of a
+   * degree of surface grain should not move where the ray starts.          */
+  vec3  bleed;
+  float ao = neighbourOcclusion(P, N, bleed) * mix(1.0, vAo, 0.9);
+
+  vec3  lightVec  = u_lightPosition - P;
+  float lightDist = length(lightVec);
+  vec3  L         = lightVec / lightDist;
+  float shadow    = neighbourShadow(P + N * eps, L);
+
+  /* ---- 0b. stable micro-surface -------------------------------------
    * Evaluated in local space and rotated into world space, so the grain is
    * welded to the plastic and tumbles with it. Applied to BOTH the world
    * normal (reflections, shadow) and the view normal (matcap), or the body
-   * shading would stay glassy while only the reflections got texture.      */
+   * shading would stay glassy while only the reflections got texture.
+   *
+   * Its strength follows the light. Surface relief is only visible when
+   * something rakes across it: in shadow there is no directional light to
+   * catch the flock, so a constant-amplitude perturbation there is not
+   * texture at all - it is a fixed-size wobble sitting on top of an almost
+   * black surface, and against that surface its CONTRAST is what reads as
+   * dirt. Measured on the un-gated version, the grain held a near-constant
+   * absolute amplitude while the signal fell away, so relative noise climbed
+   * from ~1.3% on lit surfaces to ~9.6% in the darkest bands. A floor is
+   * kept so the material never goes completely smooth and plastic.         */
   if (u_microTexture > 0.0) {
+    float raking = saturate1(dot(N, L))
+                 * mix(0.15, 1.0, shadow)
+                 * mix(0.25, 1.0, ao);
+    /* Band-limit against the pixel footprint. One noise cell spans
+       1/u_microScale in local units; fwidth gives how much local space a
+       single pixel covers at this fragment. Where a pixel spans most of a
+       cell the grain is past Nyquist and stops being texture: it turns into
+       the wire-mesh moire that shows up on grazing faces and on bore rims,
+       where foreshortening stretches the footprint. Fade it out there
+       rather than sampling something the raster cannot resolve. */
+    vec3  fpd  = fwidth(vLocalPosition);
+    float cell = 1.0 / max(u_microScale, 1e-3);
+    float band = 1.0 - smoothstep(cell * 0.35, cell * 1.0,
+                                  max(max(fpd.x, fpd.y), fpd.z));
+
+    float amount = u_microTexture * mix(MICRO_SHADOW_FLOOR, 1.0, raking) * band;
+
     vec3 g = qrotate(u_selfRotation, microGradient(vLocalPosition, u_microScale));
     g -= N * dot(g, N);                       // tangential component only
-    N  = normalize(N + g * u_microTexture);
-    vn = normalize(vn + (viewMatrix * vec4(g, 0.0)).xyz * u_microTexture);
+    N  = normalize(N + g * amount);
+    vn = normalize(vn + (viewMatrix * vec4(g, 0.0)).xyz * amount);
   }
 
   vec3  V   = normalize(cameraPosition - P);
@@ -190,16 +236,6 @@ void main() {
 
   /* ---- 1. base shading from the baked studio matcap ---------------- */
   vec4 mc = texture2D(u_matcap, vn.xy * 0.5 + 0.5);
-
-  /* ---- 2. occlusion ------------------------------------------------ */
-  vec3  bleed;
-  float ao = neighbourOcclusion(P, N, bleed) * mix(1.0, vAo, 0.9);
-
-  /* ---- 3. shadow --------------------------------------------------- */
-  vec3  lightVec  = u_lightPosition - P;
-  float lightDist = length(lightVec);
-  vec3  L         = lightVec / lightDist;
-  float shadow    = neighbourShadow(P + N * eps, L);
 
   /* ---- 4. reflection ----------------------------------------------- *
    * One deterministic ray. There is no jitter anywhere: a stochastic ray

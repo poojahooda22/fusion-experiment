@@ -116,12 +116,25 @@ bool boundingSphereHit(vec3 ro, vec3 rd, vec3 centre, float radius, float best) 
  * `k` is the softness: larger = tighter penumbra.
  */
 float sphereSoftShadow(vec3 ro, vec3 rd, vec4 sph, float k) {
-  vec3 oc = sph.xyz - ro;
-  float b = dot(oc, rd);
+  vec3  oc = sph.xyz - ro;
+  float b  = dot(oc, rd);
   if (b <= 0.0) return 1.0;                       // occluder is behind us
-  float h = dot(oc, oc) - b * b - sph.w * sph.w;
-  if (h <= 0.0) return 0.0;                       // ray passes through it
-  return smoothstep(0.0, 1.0, k * sqrt(h) / b);
+
+  /* The penumbra is driven by how far the ray MISSES the sphere by, measured
+     perpendicular to the ray: (closest approach - radius). That difference
+     has a finite slope where the ray grazes the surface, which is what makes
+     the shadow edge soft.
+
+     The tangent-length form sqrt(d*d - r*r) looks equivalent - it is also
+     zero at grazing and grows outside - but its derivative is INFINITE at
+     the tangency point, so it snaps from lit to black with no ramp at all.
+     Paired with an early `return 0.0` for rays passing inside the sphere,
+     that turned the whole term binary: hard white and hard black separated
+     by a crisp curve, which read as dark lines cutting across the pieces.
+     Inside the sphere this now goes smoothly negative and smoothstep clamps
+     it, so full shadow is still full shadow - it is just approached. */
+  float d = sqrt(max(dot(oc, oc) - b * b, 0.0));  // closest approach to centre
+  return smoothstep(0.0, 1.0, k * (d - sph.w) / b);
 }
 
 /*
