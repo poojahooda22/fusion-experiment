@@ -542,6 +542,77 @@ backing store a fraction of a pixel off the layout box and made the compositor
 bilinearly resample every frame. three already writes exact pixel dimensions to
 `canvas.style`; the override just had to go.
 
+## 9c. Dark lines on the surfaces — five causes, all of them discontinuities
+
+The complaint was that the pieces showed black lines and creases, and that the
+lit side and the shadow side read as two different materials. Every cause was a
+place where a continuous quantity was computed with a branch that did not agree
+across its boundary. None of them were visible in a code read; all of them were
+obvious once measured.
+
+**1. The matcap was black outside the unit circle.** The comment in
+`lib/matcap.js` said it clamped to the silhouette; the code computed the
+clamping factor `s` and then wrote `(0,0,0,0)` anyway. With `LinearFilter`, any
+fragment whose view-space normal is within ~7° of perpendicular to the view
+axis samples across the circle boundary and blends with those black texels:
+**46% too dark on average at grazing, up to 99% at the diagonals** (the four
+axis directions escape because `ClampToEdge` happens to repeat the right
+value, which is why the ring looked modulated rather than uniform). On a curved
+surface that is a sub-pixel dark outline; on the *flat* arm-tip annulus and
+bore floor it darkens the entire visible face whenever that arm points across
+the view. This was the single largest contributor. The fix is to evaluate the
+same lighting at the clamped silhouette normal (`nz = 0`) and write that.
+
+**2. `sphereSoftShadow` returned 1.0 for `b <= 0`.** For a ray passing inside
+the occluder the smoothstep argument is negative, so visibility is 0 at
+`b = +1e-4` and 1 at `b = 0` — a full-contrast step of *zero width*, tracing a
+hard arc across whatever surface it lands on. The cluster is deeply
+interlocked (median centre separation 0.81 against a mean bounding radius of
+0.79), so this fires on ~11% of neighbour pairs — about three arcs per cross,
+continuously. Fixed by fading the occluder out over its own radius as its
+centre passes behind the shading point.
+
+**3. `sphereOcclusion`'s `h2 > 1.0` guard.** iq's closed form is only defined
+outside the occluder; guarding it and falling back to `nl/h²` avoids the NaN
+but the two expressions differ by up to **0.49 in occlusion** at `h = 1`. That
+is a 40% brightness step drawn as a closed circle on the surface wherever a
+neighbour's shell cuts through it — again about three per cross. Fixed by
+evaluating the closed form on a clamped `h2` and blending to full occlusion
+inside. Max residual jump: 0.004. This deepens the cluster interior (correctly),
+so `u_aoStrength` came down from 0.85 to 0.65 to compensate.
+
+**4. The self proxy was too small, and its near-hit reject was a cut.** The
+proxy was shrunk to 78% of the arm length, leaving the outer 22% with no proxy
+at all; the reject threshold `0.22 × boundingRadius` landed within 0.4% of the
+bore *diameter*; and `eps` was 52% of the bore radius, so most bore fragments
+started **inside** the proxy and took hits from the inside — an outward-facing
+normal and a flat, direction-independent colour. Three named seams came out of
+that: a ring at 49% of every arm, a ring 40% down the inside of every bore, and
+the shadow cone of a cap that does not exist. Fixed by taking the proxy to
+94%/97%, skipping the trace when the origin is inside it, and replacing the
+binary reject with a `smoothstep` ramp so no curve on the surface separates
+"traced" from "environment".
+
+**5. The round-overs were below the marching-cubes cell size.** At resolution
+64 the cell is 0.0343, so `round = 0.035` and `holeRound = 0.015` were 1.0 and
+0.44 cells — not representable. The rims quantised to the grid, the analytic
+normal swung 89° across a single triangle, and `vAo` went 0.40 → 1.00 over less
+than one cell, giving a faceted polygonal dark ring at every bore mouth. Fixed
+by raising the round-overs above one cell, widening the AO march so the baked
+value has room to interpolate, and taking `high` to resolution 80.
+
+**The lit/shadow mismatch** was separate and simpler: `mix(0.32, 1.0, shadow)`
+crushed the unlit side to a third of its value, which turns one painted finish
+into two joined by a terminator. It is now `mix(0.55, 1.0, shadow)`, with the
+specular and reflection floors raised to match, and the matcap's key lights
+widened (shininess 140 → 42) so the sheen is a broad satin band rather than a
+hard streak.
+
+The general lesson is worth keeping: **at one sample per pixel, every branch in
+a shading term is a line on the object.** Antialiasing does not help — MSAA
+resolves geometric coverage and shades once per pixel per triangle, so a
+shading discontinuity inside a triangle survives at full contrast.
+
 ## 10. Performance
 
 Measured at 1204×710, `quality=high`, 28 crosses:
@@ -549,7 +620,7 @@ Measured at 1204×710, `quality=high`, 28 crosses:
 | | |
 | --- | --- |
 | meshes | 28, one draw call each, one shared geometry; the crosses compile 2 programs (opaque + frosted) |
-| triangles | 31 496 per cross at resolution 72, ~880 k per pass, ×2 passes with refraction on |
+| triangles | 37 112 per cross at resolution 80, ~1.04 M per pass, ×2 passes with refraction on |
 | antialiasing | 4× MSAA on the composer (2× on the `low` preset) |
 | fragment work | per pixel: 1 reflection ray (glossy only) × (8 sphere rejects + ~3 surviving × 3 cylinder tests), 8 analytic soft shadows, 8 analytic sphere occlusions, 4 value-noise taps on matte |
 | startup | ~256 ms geometry + ~10 ms matcap |

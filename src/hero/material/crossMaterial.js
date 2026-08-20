@@ -58,7 +58,7 @@ export function createCrossMaterial({
       u_specular: { value: 1.0 },
       u_sss: { value: 0.0 },
       u_sssColor: { value: new THREE.Color('#ffffff') },
-      u_aoStrength: { value: 0.85 },
+      u_aoStrength: { value: 0.65 },
       u_exposure: { value: 1.02 },
       /* Stable, object-space surface grain. Matte pieces on the reference have
        * a fine flocked texture; this supplies it as a material property rather

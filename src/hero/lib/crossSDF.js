@@ -17,11 +17,16 @@ export const CROSS = {
   // sign instead of a machined jack.
   armHalfLength: 1.0, // half the span of one arm, from the centre
   armRadius: 0.3, // outer radius of an arm  -> span / thickness = 3.33
-  round: 0.035, // radius of the rounding applied to every convex edge
+  /* Both round-overs have to stay above one marching-cubes cell or they are
+     simply not representable: at resolution 64 the cell is 0.0343, so the old
+     0.035 / 0.015 were 1.0 and 0.44 cells and the rims quantised to the grid -
+     polygonal instead of circular, with the analytic normal swinging 89 degrees
+     across a single triangle. */
+  round: 0.05, // radius of the rounding applied to every convex edge
   junction: 0.1, // smooth-min factor -> size of the fillet at the hub
   holeRadius: 0.11, // radius of the bore drilled into each arm tip
   holeDepth: 0.55, // how deep that bore goes
-  holeRound: 0.015, // rounding of the bore's rim + floor
+  holeRound: 0.028, // rounding of the bore's rim + floor
 }
 
 /** Bounding radius of the shape in local units (used for the ray-trace proxy). */

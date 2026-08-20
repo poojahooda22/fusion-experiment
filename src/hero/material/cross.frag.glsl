@@ -69,28 +69,43 @@ float traceNeighbourhood(vec3 ro, vec3 rd, out vec3 hitNormal, out vec3 hitColor
   /* Ourselves first - this is what gives the crosses real self-reflection
    * between their own arms.
    *
-   * The self proxy is shrunk hard, and the length far more than the radius.
-   * The proxy is a SOLID capped cylinder but the real arm tip is an annulus
-   * with a bore through it, so a proxy cap sitting at the true tip plane
-   * intercepts exactly the rays that should escape through the hole - which
-   * showed up as a ring of salt-and-pepper speckle around every bore. Pulling
-   * the cap back behind the bore floor removes it, and costs nothing that
-   * matters: arm-to-arm self reflection happens on the sides, not the caps. */
+   * Three things have to be true at once here or the self trace draws lines on
+   * the object instead of reflections in it:
+   *
+   * 1. The proxy has to be close to the real arm. It used to be shrunk to 78%
+   *    of the length, which left the outer 22% of every arm with no proxy at
+   *    all and put a hard ring where the missing cap's shadow cone landed.
+   * 2. A ray whose origin is INSIDE the proxy must not be traced. The bore
+   *    wall sits at r = 0.11 but the proxy radius is 0.26, so after the normal
+   *    offset most bore fragments start inside it and get a hit taken from the
+   *    inside - an outward-facing normal and a meaningless colour, which is
+   *    what painted the flat ring down every bore.
+   * 3. The near-hit reject must be a RAMP, not a cut. A binary threshold is a
+   *    curve on the surface separating "traced" (dark) from "environment"
+   *    (bright), and at grazing incidence reflAmount is ~0.96, so that curve is
+   *    close to a full-contrast line. Fading the self colour in over the near
+   *    band removes the boundary entirely.                                   */
   {
     vec4 pr = u_selfPositionRadius;
     vec4 q  = u_selfRotation;
     vec3 lo = qrotate(qinverse(q), ro - pr.xyz);
     vec3 ld = qrotate(qinverse(q), rd);
-    vec3 n;
-    float t = intersectCross(lo, ld, pr.w * u_armRatio.x * 0.78, pr.w * u_armRatio.y * 0.88, n);
-    /* Ignore very near self hits. A ray leaving the side of an arm travels
-     * almost tangentially and can clip back into the same cylinder a short way
-     * along, which drew a thin dark hairline down every arm. Genuine
-     * arm-to-arm reflection happens at roughly half a radius and beyond. */
-    if (t > pr.w * 0.22 && t < best) {
-      best = t;
-      hitNormal = qrotate(q, n);
-      hitColor  = u_color;
+
+    float ph = pr.w * u_armRatio.x * 0.94;   // proxy half-length
+    float prr = pr.w * u_armRatio.y * 0.97;  // proxy radius
+    vec3  al = abs(lo);
+    bool inside = (al.x < ph && length(lo.yz) < prr)
+               || (al.y < ph && length(lo.zx) < prr)
+               || (al.z < ph && length(lo.xy) < prr);
+
+    if (!inside) {
+      vec3 n;
+      float t = intersectCross(lo, ld, ph, prr, n);
+      if (t > 0.0 && t < best) {
+        best = t;
+        hitNormal = qrotate(q, n);
+        hitColor  = mix(u_bgColor * 0.4, u_color, smoothstep(pr.w * 0.10, pr.w * 0.30, t));
+      }
     }
   }
 
@@ -157,6 +172,10 @@ float neighbourOcclusion(vec3 p, vec3 n, out vec3 bleed) {
 }
 
 vec3 shadeReflectionHit(vec3 albedo, vec3 n, vec3 rd, vec3 lightDir) {
+  /* A hit taken from inside the proxy returns an outward normal facing away
+     from the ray, which pins rim to 1.0 and paints a flat direction-independent
+     colour. Flipping it to face the ray costs nothing and fixes the bore. */
+  n = faceforward(n, rd, n);
   float ndl = saturate1(dot(n, lightDir));
   float rim = pow(1.0 - saturate1(dot(n, -rd)), 3.0);
   return albedo * (0.16 + 0.95 * ndl) + vec3(0.45) * rim * 0.3;
@@ -266,11 +285,14 @@ void main() {
   vec3 diffuse = albedo * mc.rgb;
   diffuse     += albedo * bleed * 0.24;               // one bounce of colour bleed
   diffuse     *= ao;
-  diffuse     *= mix(0.32, 1.0, shadow);
+  /* The shadow side has to read as the SAME material as the lit side. Crushing
+   * it to a third of its value turns a plain painted surface into two different
+   * finishes joined by a terminator. */
+diffuse     *= mix(0.55, 1.0, shadow);
 
   vec3 col = diffuse;
-  col += reflection * reflAmount * mix(0.3, 1.0, ao);
-  col += mc.a * u_specular * mix(0.25, 1.0, shadow) * mix(0.4, 1.0, ao);
+  col += reflection * reflAmount * mix(0.5, 1.0, ao);
+  col += mc.a * u_specular * mix(0.45, 1.0, shadow) * mix(0.55, 1.0, ao);
 
   /* ---- 6. subsurface scattering ------------------------------------ */
   if (u_sss > 0.0) {

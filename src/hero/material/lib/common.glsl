@@ -94,7 +94,7 @@ float fresnelSchlick(float cosTheta, float f0) {
  */
 vec3 environment(vec3 dir, vec3 lightDir, vec3 bgColor) {
   float up = dir.y * 0.5 + 0.5;
-  vec3 col = mix(bgColor * 0.4, vec3(0.24, 0.245, 0.27), pow(up, 1.7));
+  vec3 col = mix(bgColor * 0.4, vec3(0.24, 0.245, 0.27), pow(saturate1(up), 1.7));
   col += vec3(0.42) * pow(saturate1(up), 9.0);
   // the key light itself, as a small bright disc
   float key = pow(saturate1(dot(dir, lightDir)), 900.0);

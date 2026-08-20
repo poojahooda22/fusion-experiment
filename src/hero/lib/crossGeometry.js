@@ -42,12 +42,12 @@ function bakeAo(px, py, pz, nx, ny, nz) {
   let occ = 0
   let sca = 1
   for (let i = 0; i < 5; i++) {
-    const h = 0.02 + 0.16 * (i / 4)
+    const h = 0.04 + 0.24 * (i / 4)  // wide enough that vAo has room to interpolate
     const d = crossSDF(px + nx * h, py + ny * h, pz + nz * h)
     occ += (h - d) * sca
     sca *= 0.72
   }
-  return Math.min(Math.max(1 - 3.2 * occ, 0), 1)
+  return Math.min(Math.max(1 - 1.7 * occ, 0), 1)
 }
 
 /** How much material is behind this point, sampled along -normal. */

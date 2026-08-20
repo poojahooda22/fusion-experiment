@@ -30,13 +30,13 @@ export const RECIPES = [
     id: 'accentGloss',
     weight: 16,
     swatch: 'accent',
-    uniforms: { u_roughness: 0.05, u_specular: 1.5, u_reflectivity: 1.0, u_metalness: 0.0, u_microTexture: 0.0 },
+    uniforms: { u_roughness: 0.05, u_specular: 0.8, u_reflectivity: 1.0, u_metalness: 0.0, u_microTexture: 0.0 },
   },
   {
     id: 'accentAltGloss',
     weight: 7,
     swatch: 'accentAlt',
-    uniforms: { u_roughness: 0.08, u_specular: 1.3, u_reflectivity: 0.95, u_metalness: 0.0, u_microTexture: 0.0 },
+    uniforms: { u_roughness: 0.08, u_specular: 0.75, u_reflectivity: 0.95, u_metalness: 0.0, u_microTexture: 0.0 },
   },
   {
     id: 'accentMatte',
@@ -48,7 +48,7 @@ export const RECIPES = [
     id: 'blackGloss',
     weight: 8,
     swatch: 'black',
-    uniforms: { u_roughness: 0.04, u_specular: 1.6, u_reflectivity: 1.0, u_metalness: 0.1, u_microTexture: 0.0 },
+    uniforms: { u_roughness: 0.04, u_specular: 0.85, u_reflectivity: 1.0, u_metalness: 0.1, u_microTexture: 0.0 },
   },
   {
     id: 'blackRubber',
@@ -66,7 +66,7 @@ export const RECIPES = [
     id: 'lightGloss',
     weight: 11,
     swatch: 'white',
-    uniforms: { u_roughness: 0.07, u_specular: 1.35, u_reflectivity: 0.9, u_metalness: 0.0, u_microTexture: 0.0 },
+    uniforms: { u_roughness: 0.07, u_specular: 0.75, u_reflectivity: 0.9, u_metalness: 0.0, u_microTexture: 0.0 },
   },
   {
     id: 'frosted',
