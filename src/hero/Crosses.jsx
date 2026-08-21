@@ -9,7 +9,10 @@ import { createCrossMaterial, NEIGHBOUR_COUNT } from './material/crossMaterial.j
 import { updateNeighbours } from './lib/neighbours.js'
 import { pickRecipe, swatchColor } from './palettes.js'
 
-const CLUSTER = new THREE.Vector3(2.15, 1.35, 1.5) // half-extents of the field
+/* Half-extents of the field. Widened together with the count bump below so
+   the two cancel: 1.25x the volume, 1.21x the pieces, density unchanged -
+   the frame fills without the cluster turning into gravel. */
+const CLUSTER = new THREE.Vector3(2.5, 1.45, 1.5)
 const BOUNDS_RADIUS = 4.0
 
 /* Drag tuning. The cluster spans BOUNDS_RADIUS, so a 2.2 reach moves a local

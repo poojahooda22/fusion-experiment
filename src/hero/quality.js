@@ -21,11 +21,11 @@ export const QUALITY_PRESETS = {
   // The reference frames only ever hold ~20 crosses, and they are big enough
   // that several are cut off by the edges of the box. Packing in more makes the
   // cluster read as gravel rather than as a handful of large objects.
-  high: { count: 28, resolution: 64, refractionScale: 0.5, post: 'high', cameraZ: 6.6 },
-  medium: { count: 24, resolution: 56, refractionScale: 0.4, post: 'medium', cameraZ: 6.5 },
-  low: { count: 16, resolution: 44, refractionScale: 0, post: 'low', cameraZ: 6.4 },
+  high: { count: 34, resolution: 64, refractionScale: 0.5, post: 'high', cameraZ: 5.2 },
+  medium: { count: 28, resolution: 56, refractionScale: 0.4, post: 'medium', cameraZ: 5.1 },
+  low: { count: 18, resolution: 44, refractionScale: 0, post: 'low', cameraZ: 5.2 },
   // same scene, no post chain - useful for looking at the raw material
-  raw: { count: 28, resolution: 64, refractionScale: 0.5, post: 'off', cameraZ: 6.6 },
+  raw: { count: 34, resolution: 64, refractionScale: 0.5, post: 'off', cameraZ: 5.2 },
 }
 
 export function detectQuality() {

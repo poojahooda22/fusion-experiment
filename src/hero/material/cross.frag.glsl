@@ -104,7 +104,13 @@ float traceNeighbourhood(vec3 ro, vec3 rd, out vec3 hitNormal, out vec3 hitColor
       if (t > 0.0 && t < best) {
         best = t;
         hitNormal = qrotate(q, n);
-        hitColor  = mix(u_bgColor * 0.4, u_color, smoothstep(pr.w * 0.10, pr.w * 0.30, t));
+        /* Near self-hits are the concave fillet reflecting its own arm, so
+         * they must be tone-on-tone. Basing the near band on u_bgColor made
+         * every close hit near-black on a dark palette, and because the
+         * interpolated normal decides hit-vs-miss per triangle, the fillet
+         * ring rendered as alternating black/bright sawteeth. Own-albedo
+         * dimmed keeps the occlusion cue without the two-tone contrast. */
+        hitColor  = mix(u_color * 0.45, u_color, smoothstep(pr.w * 0.10, pr.w * 0.30, t));
       }
     }
   }
@@ -290,9 +296,21 @@ void main() {
    * finishes joined by a terminator. */
 diffuse     *= mix(0.55, 1.0, shadow);
 
+  /* Both specular paths assume their ray escapes to the studio, which is
+   * simply false down a bore: the shaft blocks almost the whole hemisphere,
+   * and the self-trace cannot veto it because bore fragments start inside
+   * the arm proxy and are skipped. Un-gated, the environment() sky and the
+   * matcap highlight painted a bright ring deep inside every hole - which is
+   * what made the bores read as openings into a hollow, translucent shell.
+   * vAo (now including the analytic well term) is exactly the baked fraction
+   * of sky this point can see, so gate the specular light with it and the
+   * holes read as drilled into a solid piece: bright lip, walls falling off
+   * smoothly, near-black floor. */
+  float cavity = vAo * vAo;
+
   vec3 col = diffuse;
-  col += reflection * reflAmount * mix(0.5, 1.0, ao);
-  col += mc.a * u_specular * mix(0.45, 1.0, shadow) * mix(0.55, 1.0, ao);
+  col += reflection * reflAmount * mix(0.06, 1.0, cavity) * mix(0.5, 1.0, ao);
+  col += mc.a * u_specular * mix(0.45, 1.0, shadow) * mix(0.55, 1.0, ao) * mix(0.1, 1.0, cavity);
 
   /* ---- 6. subsurface scattering ------------------------------------ */
   if (u_sss > 0.0) {

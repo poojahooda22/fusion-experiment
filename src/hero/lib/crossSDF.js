@@ -12,21 +12,28 @@
 
 export const CROSS = {
   // Measured off the reference at a 1800px window: the overall span of a cross
-  // is ~3.3x the diameter of one arm, and the bore is ~0.37 of that diameter.
+  // is ~3.3x the diameter of one arm.
   // Getting this ratio wrong is what makes the shape read as a blobby plus
   // sign instead of a machined jack.
   armHalfLength: 1.0, // half the span of one arm, from the centre
   armRadius: 0.3, // outer radius of an arm  -> span / thickness = 3.33
-  /* Both round-overs have to stay above one marching-cubes cell or they are
-     simply not representable: at resolution 64 the cell is 0.0343, so the old
-     0.035 / 0.015 were 1.0 and 0.44 cells and the rims quantised to the grid -
-     polygonal instead of circular, with the analytic normal swinging 89 degrees
-     across a single triangle. */
-  round: 0.05, // radius of the rounding applied to every convex edge
+  /* Re-measured against the live reference (zoomed screenshots, several arms):
+     the bore mouth is ~0.28-0.30 of the arm DIAMETER, i.e. hole radius ~0.29 x
+     arm radius, not the 0.37 previously used - the old bore read visibly too
+     wide. The rim has a generous rounded lip (~0.04) that catches a specular
+     ring, and the cap edge round-over is a touch softer than before.
+
+     These small radii are now allowed to be near or below one marching-cubes
+     cell: the mesh is no longer used raw. After polygonisation every vertex is
+     Newton-snapped onto this exact SDF and high-curvature triangles (rims,
+     round-overs, fillets) are adaptively subdivided with the new vertices
+     snapped too, so the rendered surface follows the analytic shape, not the
+     grid. See crossGeometry.js. */
+  round: 0.06, // radius of the rounding applied to every convex edge
   junction: 0.1, // smooth-min factor -> size of the fillet at the hub
-  holeRadius: 0.11, // radius of the bore drilled into each arm tip
+  holeRadius: 0.09, // radius of the bore drilled into each arm tip
   holeDepth: 0.55, // how deep that bore goes
-  holeRound: 0.028, // rounding of the bore's rim + floor
+  holeRound: 0.04, // rounding of the bore's rim + floor
 }
 
 /** Bounding radius of the shape in local units (used for the ray-trace proxy). */
@@ -86,6 +93,43 @@ export function crossSDF(x, y, z) {
   bore = Math.min(bore, sdCappedCyl(z + L, x, y, hd, hr))
 
   return smax(d, -bore, CROSS.holeRound)
+}
+
+/* ------------------------------------------------------------------ */
+/* bore ambient visibility                                             */
+/* ------------------------------------------------------------------ */
+
+/*
+ * How much of the sky/studio a surface point can actually see, considering
+ * only the six bore wells. The 5-tap SDF ambient-occlusion march tops out at
+ * h = 0.28, which is shallower than the bore is deep - measured at the bore
+ * floor it returned ~0.75, which is why the bottoms of the holes were GLOWING
+ * with matcap + environment light and the whole bore read as an opening into
+ * a hollow, translucent shell instead of a hole drilled into a solid.
+ *
+ * For a point at depth d inside a well of mouth radius r the cosine-weighted
+ * visibility of the opening disc is r^2 / (r^2 + d^2) - exact on the axis,
+ * close enough on the wall. That gives the smooth bright-lip -> near-black
+ * floor gradient the reference bores have.
+ */
+function boreWell(axial, radial) {
+  const hr = CROSS.holeRadius * 1.15 // effective mouth incl. the rounded lip
+  const depth = CROSS.armHalfLength - axial // cap face sits at |axis| = L
+  if (depth <= 0) return 1
+  // 1 inside the shaft, fading to 0 outside the mouth region
+  const t = (CROSS.holeRadius * 2.2 - radial) / (CROSS.holeRadius * 1.0)
+  const inside = Math.min(Math.max(t, 0), 1)
+  if (inside <= 0) return 1
+  const vis = (hr * hr) / (hr * hr + depth * depth)
+  return 1 - inside * inside * (1 - vis)
+}
+
+/** Combined ambient visibility for all six bores, multiplied into baked AO. */
+export function boreAmbient(x, y, z) {
+  let v = boreWell(Math.abs(x), Math.hypot(y, z))
+  v = Math.min(v, boreWell(Math.abs(y), Math.hypot(z, x)))
+  v = Math.min(v, boreWell(Math.abs(z), Math.hypot(x, y)))
+  return v
 }
 
 /** Analytic-ish gradient of the SDF -> exact-looking smooth normals. */
