@@ -1,5 +1,6 @@
 import { Hero } from './hero/Hero.jsx'
 import { ShapeStudy } from './hero/ShapeStudy.jsx'
+import { Sections } from './sections/Sections.jsx'
 
 export default function App() {
   const params =
@@ -10,5 +11,11 @@ export default function App() {
   if (params?.get('debug') === 'shape') return <ShapeStudy />
 
   // ?quality=raw|low|medium|high overrides the auto-detected preset.
-  return <Hero />
+  // ?sections=0 renders the hero alone (handy when judging the material).
+  return (
+    <>
+      <Hero />
+      {params?.get('sections') !== '0' && <Sections />}
+    </>
+  )
 }

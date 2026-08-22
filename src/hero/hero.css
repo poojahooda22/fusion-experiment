@@ -2,7 +2,7 @@
   --ink: #111114;
   --paper: #eeeef8;
   min-height: 100svh;
-  padding: 26px 38px 18px;
+  padding: 26px 48px 18px;
   display: flex;
   flex-direction: column;
   gap: 18px;
@@ -128,7 +128,7 @@
 
 @media (max-width: 900px) {
   .hero {
-    padding: 18px 16px 12px;
+    padding: 18px 26px 12px;
   }
   .hero__bar {
     grid-template-columns: 1fr;

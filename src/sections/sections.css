@@ -1,0 +1,218 @@
+/* ------------------------------------------------------------------ *
+ * Sections under the hero. Layout + type is DOM; imagery is the WebGL
+ * overlay. [data-skew] blocks lean with scroll velocity via the CSS
+ * variable ScrollState writes each frame - the same subtle shear the
+ * reference applies to its text while the page is moving.
+ * ------------------------------------------------------------------ */
+
+:root {
+  --scroll-skew: 0deg;
+  --ink: #101019;
+  --paper: #eeeef8;
+}
+
+.statement,
+.gallery {
+  font-family: 'Archivo', 'Inter', 'Helvetica Neue', sans-serif;
+  color: var(--ink);
+  /* NO background: these sections sit at z-index 2, ABOVE the fixed tile
+     canvas (z-index 1). An opaque background here would paint over every
+     tile. The page colour comes from the body, which is behind the canvas. */
+  background: transparent;
+  padding: 0 calc(3.4vw + 10px);
+  position: relative;
+  z-index: 2;               /* text above the tile canvas (z 1) */
+  pointer-events: none;      /* let only real controls take the pointer */
+  transform: skewY(var(--scroll-skew));
+  will-change: transform;
+}
+
+.statement :is(button, a),
+.gallery :is(button, a, .media-slot),
+.statement .media-slot {
+  pointer-events: auto;
+}
+
+/* ---- statement ---------------------------------------------------- */
+
+.statement {
+  padding-top: 16vh;
+  padding-bottom: 10vh;
+}
+
+.statement__title {
+  margin: 0 0 9vh;
+  font-size: clamp(56px, 9.2vw, 128px);
+  line-height: 0.96;
+  letter-spacing: -0.035em;
+  font-weight: 500;
+}
+
+.statement__row {
+  display: grid;
+  grid-template-columns: minmax(300px, 46%) 1fr;
+  gap: 6vw;
+  align-items: start;
+}
+
+/* the small endpoint of the showreel morph - reserves layout space only */
+.statement__reel {
+  aspect-ratio: 4 / 3;
+  border-radius: 26px;
+}
+
+/* ---- showreel expansion stage ------------------------------------- */
+
+/* The stage is the scroll runway: its height minus one viewport is how
+   much scrolling the expansion consumes. The sticky inner pins to the
+   top of the screen for that whole distance, and the WebGL tile lerps
+   from the anchor box above into .reel-slot while it is pinned. */
+.reel-stage {
+  height: 230vh;
+  margin: 6vh calc(-3.4vw - 10px) 0; /* cancel the section padding: the sheet goes full-bleed */
+  --reel-p: 0;          /* written every frame by MediaTiles */
+}
+
+.reel-sticky {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.reel-slot {
+  width: calc(100vw - 108px);
+  aspect-ratio: 16 / 8.6;
+  max-height: 86vh;
+  border-radius: 26px;
+  cursor: pointer;
+}
+
+/* the play pill rides the expansion variable: appears past half-way,
+   with a little scale pop, exactly over the sheet's centre */
+.reel-play {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 130px;
+  height: 84px;
+  transform:
+    translate(-50%, -50%)
+    scale(clamp(0.6, calc(var(--reel-p) * 1.4 - 0.3), 1));
+  opacity: clamp(0, calc(var(--reel-p) * 2.4 - 1.3), 1);
+  border: 0;
+  border-radius: 999px;
+  background: #fff;
+  color: var(--ink);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  box-shadow: 0 18px 50px rgba(20, 20, 60, 0.18);
+  transition: transform 0.2s;
+  pointer-events: auto;
+}
+
+.reel-play:hover { transform: translate(-50%, -50%) scale(1.06); }
+
+.statement__copy {
+  max-width: 52ch;
+  padding-top: 2vh;
+}
+
+.statement__copy p {
+  margin: 0 0 5vh;
+  font-size: clamp(15px, 1.25vw, 19px);
+  line-height: 1.55;
+}
+
+.statement__cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  border: 0;
+  border-radius: 999px;
+  padding: 18px 30px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  background: #fff;
+  color: var(--ink);
+  cursor: pointer;
+  box-shadow: 0 10px 30px rgba(20, 20, 60, 0.10);
+  transition: transform 0.25s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+.statement__cta:hover { transform: scale(1.04); }
+
+.statement__cta i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ink);
+}
+
+/* ---- gallery ------------------------------------------------------ */
+
+.gallery {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  column-gap: 3vw;
+  row-gap: 9vh;
+  padding-bottom: 16vh;
+}
+
+.gallery__card { min-width: 0; }
+
+.gallery__media {
+  aspect-ratio: 16 / 10.5;
+  border-radius: 22px;
+  cursor: pointer;
+}
+
+.gallery__meta {
+  margin: 18px 0 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: #3c3c4a;
+}
+
+.gallery__name {
+  margin: 0;
+  font-size: clamp(24px, 2.6vw, 34px);
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  display: flex;
+  align-items: baseline;
+}
+
+/* the arrow slides in on card hover, pushing the name right */
+.gallery__arrow {
+  display: inline-block;
+  max-width: 0;
+  overflow: hidden;
+  opacity: 0;
+  transform: translateX(-14px);
+  transition:
+    max-width 0.35s cubic-bezier(0.2, 0.7, 0.2, 1),
+    opacity 0.3s,
+    transform 0.35s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+.gallery__card:hover .gallery__arrow {
+  max-width: 1.4em;
+  opacity: 1;
+  transform: translateX(0);
+  margin-right: 0.35em;
+}
+
+/* the empty boxes the WebGL tiles draw over */
+.media-slot { background: transparent; }
+
+@media (max-width: 820px) {
+  .statement__row { grid-template-columns: 1fr; }
+  .gallery { grid-template-columns: 1fr; row-gap: 7vh; }
+}
