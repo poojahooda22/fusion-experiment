@@ -3,27 +3,21 @@ precision highp float;
 /* ------------------------------------------------------------------ *
  * Media tile fragment shader.
  *
- * Four responsibilities, in order:
- *
- *   1. REVEAL MASK. The tile's visible area is a rounded box whose
- *      half-size grows with the show ratio, radiating outward from
- *      u_radialCenter: the box can never extend further than
- *      showRatio * (distance to the farthest corner), so the tile
- *      opens up from that point like a spreading droplet, corners
- *      last. Anti-aliased with fwidth, corner radius u_cornerRadius.
+ *   1. CORNER MASK. A rounded-box SDF at the tile's full size clips the
+ *      corners (the quad itself is rectangular), anti-aliased with
+ *      fwidth. Entry is NOT a wipe any more: the sheet arrives whole -
+ *      the corner springs carry the motion - and this mask only rounds
+ *      the corners while u_showRatio fades the whole sheet in.
  *
  *   2. COVER FIT + HOVER ZOOM. UVs are scaled/offset on the CPU for
  *      CSS-style object-fit: cover; hover adds a small centred zoom.
  *
- *   3. CURSOR FLUID. The shared paint buffer (same sim as the oil
- *      pass) displaces the sample position wherever the cursor's
- *      slick crosses the tile, so images ripple under the pointer.
+ *   3. CURSOR FLUID. The shared paint buffer displaces the sample
+ *      position wherever the cursor's slick crosses the tile.
  *
- *   4. DUOTONE -> COLOUR. The unrevealed image is a two-tone print:
- *      luminance with a colour floor - max(u_tint, luma) sends the
- *      shadows to ultramarine and the highlights to paper white.
- *      The mix to full colour rides the show ratio; a tile flagged
- *      u_keepTint (the showreel) stays duotone forever.
+ *   4. OPTIONAL DUOTONE. Only a tile that declares data-tint renders
+ *      the two-tone print (max(tint, luma)); expansion restores full
+ *      colour. Tiles without a tint are always full colour.
  * ------------------------------------------------------------------ */
 
 uniform sampler2D u_texture;
@@ -34,16 +28,14 @@ uniform vec2  u_viewport;           // css px
 uniform vec2  u_uvScale;            // cover-fit
 uniform vec2  u_uvOffset;
 uniform vec3  u_tint;               // duotone floor colour
-uniform float u_keepTint;           // 1 = stay duotone after reveal
+uniform float u_hasTint;            // 0 = always full colour
 uniform float u_cornerRadius;       // css px
-uniform vec2  u_radialCenter;       // uv the reveal radiates from
-uniform float u_showRatio;          // eased, same value the vertex saw
+uniform float u_showRatio;          // eased 0..1, drives the entry fade
 uniform float u_hoverRatio;         // eased 0..1
 uniform float u_expandRatio;        // showreel expansion, eased 0..1
 
 varying vec2  v_uv;
 varying vec2  v_domWH;
-varying float v_showRatio;
 
 /* signed distance to a rounded box centred at the origin */
 float sdRoundedBox(vec2 p, vec2 halfSize, float radius) {
@@ -51,35 +43,12 @@ float sdRoundedBox(vec2 p, vec2 halfSize, float radius) {
   return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - radius;
 }
 
-float revealMask(vec2 uv) {
-  vec2 halfSize = v_domWH * 0.5;
-  float aspect = v_domWH.x / v_domWH.y;
-
-  // farthest corner from the radial centre, aspect corrected, in px
-  vec2 toCorner = max(u_radialCenter, 1.0 - u_radialCenter) * v_domWH;
-  float maxDist = length(toCorner);
-
-  float t = u_showRatio * maxDist;
-  float minSize = min(halfSize.x, halfSize.y);
-  float maxSize = max(halfSize.x, halfSize.y);
-
-  // corner radius eases in as the box grows past the small side
-  float radius = mix(
-    minSize * clamp(t / max(minSize, 1.0), 0.0, 1.0),
-    u_cornerRadius,
-    clamp((t - maxSize) / max(maxDist - maxSize, 1.0), 0.0, 1.0)
-  );
-
-  // the box may not extend past the reveal front
-  halfSize = min(halfSize, vec2(t));
-
-  vec2 p = (uv - u_radialCenter) * v_domWH;
-  float d = sdRoundedBox(p, halfSize, radius);
-  return smoothstep(0.0, -fwidth(d), d);
-}
-
 void main() {
-  float alpha = revealMask(v_uv);
+  /* corner mask at full size, in the sheet's own (undeformed) uv space */
+  vec2 p = (v_uv - 0.5) * v_domWH;
+  float d = sdRoundedBox(p, v_domWH * 0.5, u_cornerRadius);
+  float alpha = smoothstep(0.0, -fwidth(d), d);
+  alpha *= u_showRatio;
   if (alpha <= 0.001) discard;
 
   /* cover fit + hover zoom (v_uv.y runs top-down like the DOM; texture
@@ -96,14 +65,10 @@ void main() {
 
   vec3 color = texture2D(u_texture, uv).rgb;
 
-  /* duotone print of the same frame */
+  /* optional duotone print; expansion earns the colour back */
   float luma = dot(color, vec3(0.299, 0.587, 0.114));
   vec3 tinted = max(u_tint, vec3(luma));
-
-  /* Reveal decides colour for ordinary tiles; a keep-tint tile (the
-   * showreel) stays duotone UNTIL it expands - growing to full width is
-   * what earns it its colour back, exactly like the reference. */
-  float colorRatio = max(v_showRatio * (1.0 - u_keepTint), u_expandRatio);
+  float colorRatio = max(1.0 - u_hasTint, u_expandRatio);
   color = mix(tinted, color, colorRatio);
 
   /* the slick also lifts the print slightly, like light through liquid */

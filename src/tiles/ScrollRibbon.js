@@ -3,7 +3,7 @@ import vertexShader from './glsl/ribbon.vert.glsl'
 import fragmentShader from './glsl/ribbon.frag.glsl'
 
 /**
- * The fat blue line that draws itself across the statement section as the
+ * The blue line that draws itself across the statement section as the
  * page scrolls.
  *
  * Construction (mirrors the reference's line renderer):
@@ -11,48 +11,55 @@ import fragmentShader from './glsl/ribbon.frag.glsl'
  *   author time  - a handful of anchor points, written as fractions of the
  *                  section's width and of one viewport height, so the path
  *                  survives resizes and font changes
- *   build time   - Catmull-Rom through the anchors -> ~240 samples ->
+ *   build time   - Catmull-Rom through the anchors -> ~320 samples ->
  *                  a two-vertex-per-sample triangle strip whose centreline,
  *                  normal, arc-ratio and side are baked as attributes
  *                  (document-space pixels; only u_scrollY moves it after)
  *   frame time   - two numbers: u_showRatio (how much of the arc exists)
- *                  and u_hideRatio (how much has been erased behind it),
- *                  both eased from the section's scroll progress. Draw-on
- *                  and draw-off are THE SAME mechanism at opposite ends.
+ *                  and u_hideRatio (how much has been erased behind it).
+ *                  The strip keeps FULL width right up to each end; the
+ *                  fragment shader cuts a true semicircle there from the
+ *                  distance to the end point - a round pen tip, never a
+ *                  tapering arrow.
  *
  * The mesh renders before the media tiles, so the line passes BEHIND the
  * imagery but in front of the page background - and DOM text (z-index 2)
- * stays above all of it, which is why the line can duck under a headline.
+ * stays above all of it, which is why the line can duck under a headline
+ * and wrap around the statement card.
  */
 
 const ANCHORS = [
   // x: fraction of section width; y: fraction of one viewport height,
   // both measured from the section's top-left in document space.
   //
-  // Draw ORDER is the choreography (the head visits these in sequence):
-  //   entry hook -> diagonal C down behind the card -> bottom hook ->
-  //   the LOOP on the way back up -> sweep right, EXIT the right edge ->
-  //   off-screen turn -> re-enter diving down-left across the reel stage.
-  [-0.08, 0.06],   // off-left, heading height
-  [0.06, 0.10],    // entry, already curving down
-  [0.20, 0.22],    // behind the heading lines
-  [0.33, 0.40],    // bulge right, steepening
-  [0.33, 0.62],    // turn back left behind the card's top-right
-  [0.20, 0.80],    // diagonal through the card zone
-  [0.10, 0.95],    // bottom hook (the head parks here mid-scroll)
-  [0.05, 0.75],    // curl back up-left: loop begins
-  [0.09, 0.45],    // loop left
-  [0.24, 0.30],    // loop top
-  [0.385, 0.44],   // loop right
-  [0.345, 0.66],   // loop bottom - crosses the earlier diagonal
-  [0.55, 0.60],    // leave the loop heading right
-  [0.85, 0.48],    // sweep, slightly rising
-  [1.18, 0.44],    // EXIT the right edge
-  [1.30, 0.85],    // off-screen turn
-  [1.00, 1.35],    // re-enter, diving down-left
-  [0.60, 1.75],    // behind the expanding showreel sheet
-  [0.22, 2.10],
-  [-0.10, 2.35],   // exit off-left below
+  // The choreography is the reference's: ONE giant arc in from the top
+  // left, over the headline, a steep descent right of the title, a dive
+  // behind the statement card, one ellipse LOOP wrapped around the card
+  // (visible below / left / above it, hidden where the card covers it),
+  // then a sweep out the right edge, an off-screen turn, and a final
+  // dive across the showreel zone. Radii stay HUGE - the elegance of the
+  // reference line is that it never wiggles.
+  [-0.10, -0.02],  // off-left, above the heading
+  [0.08, 0.06],    // entering, already curving
+  [0.28, 0.12],    // crest, behind the first heading line
+  [0.44, 0.30],    // bending down, right of the heading
+  [0.475, 0.58],   // steep descent, in the channel between card and copy
+  [0.46, 0.85],    // easing back left, along the card's right edge
+  [0.36, 1.08],    // diving behind the card
+  [0.16, 1.20],    // visible below the card
+  [-0.01, 1.02],   // left of the card, curving up
+  [0.02, 0.74],    // rising along the card's left edge
+  [0.16, 0.56],    // above the card's top-left corner
+  [0.36, 0.63],    // dips behind the card top
+  [0.485, 0.86],   // down the card's covered right side
+  /* the ending: out of the loop the line sweeps right in a lazy S below
+     the copy and runs off the RIGHT edge of the canvas - the head
+     finishes at the edge, never parked mid-air between sections */
+  [0.60, 1.06],    // out from behind the card's lower right
+  [0.72, 0.95],    // the S's first crest
+  [0.82, 1.02],    // easing back down
+  [0.94, 1.10],    // heading for the edge
+  [1.06, 1.16],    // and off it - the visible end sits AT the right edge
 ]
 
 const SAMPLES = 320
@@ -84,10 +91,11 @@ export class ScrollRibbon {
       side: THREE.DoubleSide, // the y-down camera flips winding
       uniforms: {
         u_scrollY: { value: 0 },
-        u_width: { value: 48 },
+        u_width: { value: 34 },
         u_showRatio: { value: 0 },
         u_hideRatio: { value: 0 },
-        u_capLen: { value: 0.009 },
+        u_capLen: { value: 0.005 },
+        u_totalArc: { value: 1 },
         u_color0: { value: new THREE.Color('#4b3ff2') },
         u_color1: { value: new THREE.Color('#2b28e4') },
       },
@@ -169,27 +177,29 @@ export class ScrollRibbon {
     // ShaderMaterial still expects a `position` attribute to exist
     this.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(n * 2 * 3), 3))
 
-    const width = Math.min(84, Math.max(44, w * 0.062))
+    /* the reference stroke measures ~2.2% of the viewport width */
+    const width = Math.min(44, Math.max(26, w * 0.022))
     this.material.uniforms.u_width.value = width
-    /* a TRUE round cap: the taper must span exactly half the width of the
-       line in arc-length, otherwise it reads as an arrow point */
+    /* one cap = half a width of arc; the fragment shader cuts the actual
+       semicircle inside this margin */
     this.material.uniforms.u_capLen.value = (width * 0.5) / total
+    this.material.uniforms.u_totalArc.value = total
     this.totalArc = total
   }
 
   /**
    * Drive the draw window from the section's position in the viewport.
    * P: 0 as the section's top reaches the bottom of the screen, 1 as its
-   * authored region (~1.5 viewport heights) has scrolled past.
+   * authored region (~2.6 viewport heights) has scrolled past.
    */
-  update(dt, scrollY, viewportH) {
+  update(dt, scrollY, viewportH, reelP = 0) {
     const rect = this.sectionEl.getBoundingClientRect()
-    const span = Math.min(viewportH * 2.2, rect.height)
+    const span = Math.min(viewportH * 2.6, rect.height)
     const P = THREE.MathUtils.clamp(
       (viewportH * 0.85 - rect.top) / (span + viewportH * 0.85), 0, 1)
 
     // smooth the input so wheel steps become one continuous stroke
-    const k = 1 - Math.pow(0.002, dt)
+    const k = 1 - Math.pow(0.0005, dt)
     this.progress += (P - this.progress) * k
 
     const sm = (a, b, x) => {
@@ -197,11 +207,13 @@ export class ScrollRibbon {
       return t * t * (3 - 2 * t)
     }
     const u = this.material.uniforms
-    /* The head follows the scroll: near-linear over the whole span, so at
-     * every stop the pen has just written the part of the shape the viewer
-     * is looking at (stub -> C -> loop -> exit right -> dive). */
-    u.u_showRatio.value = sm(0.02, 0.92, this.progress) * 1.03
-    u.u_hideRatio.value = sm(0.94, 1.0, this.progress) * 0.4
+    /* The whole figure - entry arc, card loop, S-sweep, parked hook - is
+     * fully written within one scroll into the section (P 0.42), then
+     * HOLDS with its round head parked mid-screen. It erases in sync
+     * with the showreel's expansion (reelP), with a scroll-based sweep
+     * as the backstop for scrolling straight past. */
+    u.u_showRatio.value = sm(0.02, 0.38, this.progress) * 1.02
+    u.u_hideRatio.value = Math.max(sm(0.62, 0.90, this.progress), sm(0.10, 0.72, reelP))
     u.u_scrollY.value = scrollY
 
     // nothing to draw yet (or fully erased): skip the mesh entirely

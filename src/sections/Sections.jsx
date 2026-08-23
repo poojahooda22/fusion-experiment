@@ -4,26 +4,26 @@ import './sections.css'
 
 /*
  * The two sections under the hero, following the reference's structure:
- * a statement section with one media card, then a 2x2 project gallery.
+ * a statement section with one media card, then a two-column project
+ * gallery under a display-size heading.
  *
  * All layout and text is real DOM. The images are NOT: each `.media-slot`
- * is an empty box whose rect is drawn on the fixed WebGL overlay by
- * MediaTiles (reveal, duotone, scroll flex, cursor ripple all happen
- * there). data attributes carry the per-tile settings:
+ * is an empty box whose rect is chased by a soft-body WebGL sheet drawn
+ * on the fixed overlay by MediaTiles (corner springs, velocity bow,
+ * cursor ripple all happen there). data attributes carry the per-tile
+ * settings:
  *
  *   data-media     texture url
- *   data-tint      duotone floor colour
- *   data-keep-tint "1" keeps the tile duotone after reveal (the showreel)
  *   data-radius    corner radius, css px
- *   data-origin    uv point the reveal radiates from
- *   data-delay     reveal stagger, seconds
+ *   data-delay     entry stagger, seconds
+ *   data-expand    "1": this tile morphs into the full-width showreel
  */
 
 const PROJECTS = [
-  { name: 'Helix Grid', meta: 'CONCEPT • WEB • DESIGN • 3D • ANIMATION', year: '2026', src: '/media/tile-1.webp', delay: 0 },
-  { name: 'Slate Motion', meta: 'CONCEPT • WEB • DEVELOPMENT • 3D', year: '2026', src: '/media/tile-2.webp', delay: 0.12 },
-  { name: 'Nimbus Lab', meta: 'WEB • DESIGN • DEVELOPMENT • 3D', year: '2025', src: '/media/tile-3.webp', delay: 0.06 },
-  { name: 'Iron Grove', meta: 'WEB • DESIGN • 3D • ANIMATION', year: '2025', src: '/media/tile-4.webp', delay: 0.18 },
+  { name: 'Helix Grid', meta: 'CONCEPT • WEB • DESIGN • 3D • ANIMATION', src: '/media/tile-1.webp', delay: 0 },
+  { name: 'Slate Motion', meta: 'CONCEPT • WEB • DEVELOPMENT • 3D', src: '/media/tile-2.webp', delay: 0.12 },
+  { name: 'Nimbus Lab', meta: 'WEB • DESIGN • DEVELOPMENT • 3D', src: '/media/tile-3.webp', delay: 0.06 },
+  { name: 'Iron Grove', meta: 'WEB • DESIGN • 3D • ANIMATION', src: '/media/tile-4.webp', delay: 0.18 },
 ]
 
 export function Sections() {
@@ -35,7 +35,7 @@ export function Sections() {
   return (
     <>
       {/* data-ribbon: the scroll-drawn line anchors its path to this section */}
-      <section className="statement" data-skew data-ribbon>
+      <section className="statement" data-ribbon>
         <h2 className="statement__title">
           Built to move,
           <br />
@@ -44,8 +44,8 @@ export function Sections() {
 
         <div className="statement__row">
           {/* the SMALL endpoint of the showreel morph. Layout only - the
-              pixels are drawn by the WebGL tile, which lerps its rect from
-              this box to the full-width slot inside the stage below. */}
+              pixels are drawn by the WebGL sheet, which springs its rect
+              from this box to the full-width slot inside the stage below. */}
           <div className="statement__reel" data-expand-anchor aria-hidden="true" />
           <div className="statement__copy">
             <p>
@@ -59,57 +59,54 @@ export function Sections() {
           </div>
         </div>
 
-        {/* the showreel's scroll runway: ~1.3 extra viewport-heights of
-            scroll are consumed while the sticky inner pins and the tile
-            grows from the anchor above into this full-width slot */}
+        {/* the showreel's scroll runway: one approach viewport of
+            scroll grows the sheet while the sticky inner pins, then a short
+            hold before it releases */}
         <div className="reel-stage">
           <div className="reel-sticky">
             <div
               className="media-slot reel-slot"
               data-media="/media/reel.webp"
-              data-tint="#3230ee"
               data-expand="1"
-              data-radius="26"
-              data-origin="0.5,0.6"
+              data-radius="20"
               aria-label="showreel"
             />
-            <button className="reel-play" type="button" aria-label="play showreel">
-              <svg viewBox="0 0 20 20" width="20" height="20" aria-hidden="true">
-                <path d="M6 4.2v11.6L16 10 6 4.2z" fill="currentColor" />
-              </svg>
-            </button>
           </div>
         </div>
       </section>
 
-      <section className="gallery" data-skew>
+      <section className="gallery">
         <header className="gallery__head">
-          <p className="gallery__eyebrow">
-            <i /> FEATURED WORK <span>(0{PROJECTS.length})</span>
+          <h2 className="gallery__title">Featured work</h2>
+          <p className="gallery__blurb">
+            A selection of interactive experiences created for ambitious
+            brands and forward thinking teams.
           </p>
-          <h2 className="gallery__title">Selected projects</h2>
         </header>
 
         <div className="gallery__grid">
-          {PROJECTS.map((p, i) => (
+          {PROJECTS.map((p) => (
             <article className="gallery__card" key={p.name}>
               <div
                 className="media-slot gallery__media"
                 data-media={p.src}
-                data-tint="#3230ee"
-                data-radius="22"
-                data-origin="0.5,0.65"
+                data-radius="15"
                 data-delay={p.delay}
                 aria-label={p.name}
               />
-              <div className="gallery__row">
-                <p className="gallery__meta">{p.meta}</p>
-                <span className="gallery__year">{p.year}</span>
-              </div>
+              <p className="gallery__meta">{p.meta}</p>
+              {/* per-letter spans: the hover wave (see .gallery__char) */}
               <h3 className="gallery__name">
-                <span className="gallery__index">0{i + 1}</span>
-                <span className="gallery__arrow">{'→'}</span>
-                {p.name}
+                <span className="gallery__arrow" aria-hidden="true">{'→'}</span>
+                {[...p.name].map((ch, i) => (
+                  <span
+                    className="gallery__char"
+                    key={i}
+                    style={{ transitionDelay: `${i * 16}ms` }}
+                  >
+                    {ch === ' ' ? ' ' : ch}
+                  </span>
+                ))}
               </h3>
             </article>
           ))}
@@ -117,7 +114,7 @@ export function Sections() {
 
         <footer className="gallery__foot">
           <button className="gallery__all" type="button">
-            <i /> VIEW ALL PROJECTS
+            <i /> SEE ALL PROJECTS
           </button>
         </footer>
       </section>

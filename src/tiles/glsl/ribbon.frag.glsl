@@ -1,20 +1,28 @@
 precision highp float;
 
 /* ------------------------------------------------------------------ *
- * Ribbon fragment: everything that makes the flat strip read as a fat
- * 3D tube.
+ * Ribbon fragment: silhouette + caps + tube shading, all from one
+ * distance field.
  *
- *   1. edge AA from the side coordinate + fwidth (the reference does
- *      exactly this - no MSAA needed for a clean silhouette)
- *   2. a colour gradient along the arc, interpolated IN HSV so the blue
- *      stays saturated through the blend instead of dipping grey
- *   3. lateral shading: darker toward both edges (curvature), plus a
- *      soft highlight band just off-centre - the "gloss line" a rounded
- *      extrusion would catch from a top light
+ * d = distance (px) from this fragment to the nearest point of the
+ * VISIBLE centreline segment [hideRatio .. showRatio]:
+ *
+ *   - inside the window, that is just the lateral offset |side * halfW|
+ *   - beyond either end, the longitudinal overshoot (in px, via the
+ *     total arc length) joins the lateral offset in a length(), which
+ *     makes the cut at d = halfW an exact SEMICIRCLE - the round pen
+ *     tip of the reference, at every scroll position, both ends.
+ *
+ * The same d/halfW drives the rounded-section shading, so the cap
+ * shades like a sphere and the body like a tube, with no seam.
  * ------------------------------------------------------------------ */
 
-uniform vec3 u_color0;   // head colour
-uniform vec3 u_color1;   // tail colour
+uniform vec3  u_color0;   // head colour
+uniform vec3  u_color1;   // tail colour
+uniform float u_width;
+uniform float u_totalArc;
+uniform float u_showRatio;
+uniform float u_hideRatio;
 
 varying float v_side;
 varying float v_ratio;
@@ -35,17 +43,31 @@ vec3 hsv2rgb(vec3 c) {
 }
 
 void main() {
+  float halfW = u_width * 0.5;
+  float lat = v_side * halfW;
+
+  // longitudinal overshoot past the visible ends, in px of arc
+  float over = max(v_ratio - u_showRatio, u_hideRatio - v_ratio);
+  float longPx = max(over, 0.0) * u_totalArc;
+  float d = length(vec2(longPx, lat));
+
+  float aa = max(fwidth(d), 0.75);
+  float alpha = smoothstep(halfW, halfW - aa * 1.6, d);
+  if (alpha <= 0.002) discard;
+
+  // colour gradient along the arc, interpolated in HSV so the blue stays
+  // saturated through the blend instead of dipping grey
   float t = 1.0 - pow(1.0 - clamp(v_ratio, 0.0, 1.0), 2.0);
   vec3 a = rgb2hsv(u_color1);
   vec3 b = rgb2hsv(u_color0);
   float hue = (mod(mod(b.x - a.x, 1.0) + 1.5, 1.0) - 0.5) * t + a.x;
   vec3 color = hsv2rgb(vec3(hue, mix(a.yz, b.yz, t)));
 
-  float s = abs(v_side);
-  // rounded-section shading + gloss line
-  color *= 0.80 + 0.20 * sqrt(max(1.0 - s * s, 0.0));
+  // rounded-section shading from the same field: tube body, sphere cap
+  float sN = clamp(d / halfW, 0.0, 1.0);
+  color *= 0.80 + 0.20 * sqrt(max(1.0 - sN * sN, 0.0));
+  // the gloss line a rounded extrusion catches from a top light
   color += 0.06 * smoothstep(0.55, 0.0, abs(v_side + 0.35));
 
-  float alpha = smoothstep(1.0, 1.0 - fwidth(v_side) * 1.6, s);
   gl_FragColor = vec4(color, alpha);
 }

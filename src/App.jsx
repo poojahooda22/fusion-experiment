@@ -1,6 +1,7 @@
 import { Hero } from './hero/Hero.jsx'
 import { ShapeStudy } from './hero/ShapeStudy.jsx'
 import { Sections } from './sections/Sections.jsx'
+import './scroll/smooth.js'
 
 export default function App() {
   const params =

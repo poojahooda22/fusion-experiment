@@ -7,11 +7,9 @@
  *
  *   velocity  - css px/s, exponentially smoothed
  *   bend      - the tile-flex amount: velocity shaped + clamped
- *   skew      - a small shear for DOM text, written to a CSS variable
  *
- * The skew is applied by CSS (`[data-skew]` sections read --scroll-skew),
- * which is exactly the subtle "text leans while you scroll" the reference
- * shows; it costs one style write per frame.
+ * DOM text stays perfectly still - the reference moves only its media,
+ * so all motion here feeds the WebGL sheets, never a CSS transform.
  */
 export class ScrollState {
   constructor() {
@@ -33,8 +31,5 @@ export class ScrollState {
     // px/s -> bend factor; sub-pixel-per-frame scrolling should not wobble
     const shaped = this.velocity * 0.00012
     this.bend = Math.max(-0.09, Math.min(0.09, shaped))
-
-    const skewDeg = Math.max(-1.2, Math.min(1.2, this.velocity * 0.0016))
-    document.documentElement.style.setProperty('--scroll-skew', skewDeg.toFixed(4) + 'deg')
   }
 }
