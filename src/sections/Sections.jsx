@@ -20,10 +20,10 @@ import './sections.css'
  */
 
 const PROJECTS = [
-  { name: 'Helix Grid', meta: 'CONCEPT • WEB • DESIGN • 3D • ANIMATION', src: '/media/tile-1.webp', delay: 0 },
-  { name: 'Slate Motion', meta: 'CONCEPT • WEB • DEVELOPMENT • 3D', src: '/media/tile-2.webp', delay: 0.12 },
-  { name: 'Nimbus Lab', meta: 'WEB • DESIGN • DEVELOPMENT • 3D', src: '/media/tile-3.webp', delay: 0.06 },
-  { name: 'Iron Grove', meta: 'WEB • DESIGN • 3D • ANIMATION', src: '/media/tile-4.webp', delay: 0.18 },
+  { name: 'Helix Grid', meta: 'CONCEPT • WEB • DESIGN • 3D • ANIMATION', year: '2026', src: '/media/tile-1.webp', delay: 0 },
+  { name: 'Slate Motion', meta: 'CONCEPT • WEB • DEVELOPMENT • 3D', year: '2026', src: '/media/tile-2.webp', delay: 0.12 },
+  { name: 'Nimbus Lab', meta: 'WEB • DESIGN • DEVELOPMENT • 3D', year: '2025', src: '/media/tile-3.webp', delay: 0.06 },
+  { name: 'Iron Grove', meta: 'WEB • DESIGN • 3D • ANIMATION', year: '2025', src: '/media/tile-4.webp', delay: 0.18 },
 ]
 
 export function Sections() {
@@ -83,24 +83,43 @@ export function Sections() {
       </section>
 
       <section className="gallery" data-skew>
-        {PROJECTS.map((p) => (
-          <article className="gallery__card" key={p.name}>
-            <div
-              className="media-slot gallery__media"
-              data-media={p.src}
-              data-tint="#3230ee"
-              data-radius="22"
-              data-origin="0.5,0.65"
-              data-delay={p.delay}
-              aria-label={p.name}
-            />
-            <p className="gallery__meta">{p.meta}</p>
-            <h3 className="gallery__name">
-              <span className="gallery__arrow">{'→'}</span>
-              {p.name}
-            </h3>
-          </article>
-        ))}
+        <header className="gallery__head">
+          <p className="gallery__eyebrow">
+            <i /> FEATURED WORK <span>(0{PROJECTS.length})</span>
+          </p>
+          <h2 className="gallery__title">Selected projects</h2>
+        </header>
+
+        <div className="gallery__grid">
+          {PROJECTS.map((p, i) => (
+            <article className="gallery__card" key={p.name}>
+              <div
+                className="media-slot gallery__media"
+                data-media={p.src}
+                data-tint="#3230ee"
+                data-radius="22"
+                data-origin="0.5,0.65"
+                data-delay={p.delay}
+                aria-label={p.name}
+              />
+              <div className="gallery__row">
+                <p className="gallery__meta">{p.meta}</p>
+                <span className="gallery__year">{p.year}</span>
+              </div>
+              <h3 className="gallery__name">
+                <span className="gallery__index">0{i + 1}</span>
+                <span className="gallery__arrow">{'→'}</span>
+                {p.name}
+              </h3>
+            </article>
+          ))}
+        </div>
+
+        <footer className="gallery__foot">
+          <button className="gallery__all" type="button">
+            <i /> VIEW ALL PROJECTS
+          </button>
+        </footer>
       </section>
     </>
   )

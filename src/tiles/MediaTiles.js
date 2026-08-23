@@ -72,6 +72,8 @@ class Tile {
         u_parallax: { value: 0 },
         u_expandRatio: { value: 0 },
         u_expandCurl: { value: new THREE.Vector2() },
+        u_expandS: { value: 0 },
+        u_expandTilt: { value: 0 },
       },
     })
 
@@ -124,11 +126,19 @@ class Tile {
       this._peVel += (vel - this._peVel) * (1 - Math.pow(0.001, dt))
       this._pe = pe
       const pulse = pe * (1 - pe)
-      const curlY = THREE.MathUtils.clamp(this._peVel * 0.055, -0.085, 0.085)
-        + pulse * 0.11 + pe * 0.028
-      const curlX = THREE.MathUtils.clamp(this._peVel * -0.02, -0.03, 0.03)
-        + pulse * 0.04
+      const curlY = THREE.MathUtils.clamp(this._peVel * 0.09, -0.1, 0.1)
+        + pulse * 0.14 + pe * 0.028
+      const curlX = THREE.MathUtils.clamp(this._peVel * -0.03, -0.04, 0.04)
+        + pulse * 0.05
+      /* the S-harmonic and the tilt are what make it read as CLOTH being
+       * carried, not a rectangle being scaled */
+      const sBend = THREE.MathUtils.clamp(this._peVel * 0.05, -0.05, 0.05)
+        + pulse * 0.035
+      const tilt = THREE.MathUtils.clamp(-this._peVel * 0.045, -0.05, 0.05)
+        + pulse * 0.045
       u.u_expandCurl.value.set(curlY, curlX)
+      u.u_expandS.value = sBend
+      u.u_expandTilt.value = tilt
       u.u_expandRatio.value = pe
 
       // the play pill + caption fade in via CSS from this one variable

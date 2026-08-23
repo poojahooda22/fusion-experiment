@@ -156,12 +156,106 @@
 
 /* ---- gallery ------------------------------------------------------ */
 
-.gallery {
+.gallery { padding-bottom: 12vh; }
+
+.gallery__head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin: 0 0 8vh;
+  border-top: 1px solid rgba(16, 16, 25, 0.16);
+  padding-top: 26px;
+}
+
+.gallery__eyebrow {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+}
+
+.gallery__eyebrow i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #3230ee;
+}
+
+.gallery__eyebrow span { color: #7a7a90; }
+
+.gallery__title {
+  margin: 0;
+  font-size: clamp(34px, 4.6vw, 64px);
+  font-weight: 500;
+  letter-spacing: -0.03em;
+}
+
+.gallery__grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   column-gap: 3vw;
   row-gap: 9vh;
-  padding-bottom: 16vh;
+}
+
+.gallery__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.gallery__year {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: #7a7a90;
+}
+
+.gallery__index {
+  font-size: 12px;
+  font-weight: 600;
+  color: #7a7a90;
+  margin-right: 14px;
+  transform: translateY(-0.9em);
+  display: inline-block;
+}
+
+.gallery__foot {
+  display: flex;
+  justify-content: center;
+  margin-top: 10vh;
+}
+
+.gallery__all {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  border: 0;
+  border-radius: 999px;
+  padding: 20px 34px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  background: #fff;
+  color: var(--ink);
+  cursor: pointer;
+  box-shadow: 0 12px 34px rgba(20, 20, 60, 0.12);
+  transition: transform 0.25s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+.gallery__all:hover { transform: scale(1.05); }
+
+.gallery__all i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #3230ee;
 }
 
 .gallery__card { min-width: 0; }
@@ -214,5 +308,5 @@
 
 @media (max-width: 820px) {
   .statement__row { grid-template-columns: 1fr; }
-  .gallery { grid-template-columns: 1fr; row-gap: 7vh; }
+  .gallery__grid { grid-template-columns: 1fr; row-gap: 7vh; }
 }

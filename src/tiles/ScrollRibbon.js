@@ -27,26 +27,35 @@ import fragmentShader from './glsl/ribbon.frag.glsl'
 
 const ANCHORS = [
   // x: fraction of section width; y: fraction of one viewport height,
-  // both measured from the section's top-left in document space
-  [-0.10, 0.14],
-  [0.30, 0.02],
-  [0.74, 0.08],
-  [0.965, 0.30],
-  [0.78, 0.52],
-  [0.44, 0.46],
-  [0.16, 0.37],
-  [0.045, 0.20],
-  [0.10, 0.045],
-  [0.285, 0.09],
-  [0.345, 0.30],
-  [0.20, 0.475],
-  [0.295, 0.72],
-  [0.56, 0.95],
-  [0.86, 1.16],
-  [1.12, 1.32],
+  // both measured from the section's top-left in document space.
+  //
+  // Draw ORDER is the choreography (the head visits these in sequence):
+  //   entry hook -> diagonal C down behind the card -> bottom hook ->
+  //   the LOOP on the way back up -> sweep right, EXIT the right edge ->
+  //   off-screen turn -> re-enter diving down-left across the reel stage.
+  [-0.08, 0.06],   // off-left, heading height
+  [0.06, 0.10],    // entry, already curving down
+  [0.20, 0.22],    // behind the heading lines
+  [0.33, 0.40],    // bulge right, steepening
+  [0.33, 0.62],    // turn back left behind the card's top-right
+  [0.20, 0.80],    // diagonal through the card zone
+  [0.10, 0.95],    // bottom hook (the head parks here mid-scroll)
+  [0.05, 0.75],    // curl back up-left: loop begins
+  [0.09, 0.45],    // loop left
+  [0.24, 0.30],    // loop top
+  [0.385, 0.44],   // loop right
+  [0.345, 0.66],   // loop bottom - crosses the earlier diagonal
+  [0.55, 0.60],    // leave the loop heading right
+  [0.85, 0.48],    // sweep, slightly rising
+  [1.18, 0.44],    // EXIT the right edge
+  [1.30, 0.85],    // off-screen turn
+  [1.00, 1.35],    // re-enter, diving down-left
+  [0.60, 1.75],    // behind the expanding showreel sheet
+  [0.22, 2.10],
+  [-0.10, 2.35],   // exit off-left below
 ]
 
-const SAMPLES = 240
+const SAMPLES = 320
 
 function catmullRom(p0, p1, p2, p3, t) {
   const t2 = t * t
@@ -160,7 +169,12 @@ export class ScrollRibbon {
     // ShaderMaterial still expects a `position` attribute to exist
     this.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(n * 2 * 3), 3))
 
-    this.material.uniforms.u_width.value = Math.min(64, Math.max(34, w * 0.052))
+    const width = Math.min(84, Math.max(44, w * 0.062))
+    this.material.uniforms.u_width.value = width
+    /* a TRUE round cap: the taper must span exactly half the width of the
+       line in arc-length, otherwise it reads as an arrow point */
+    this.material.uniforms.u_capLen.value = (width * 0.5) / total
+    this.totalArc = total
   }
 
   /**
@@ -170,9 +184,9 @@ export class ScrollRibbon {
    */
   update(dt, scrollY, viewportH) {
     const rect = this.sectionEl.getBoundingClientRect()
-    const span = Math.min(viewportH * 1.5, rect.height)
+    const span = Math.min(viewportH * 2.2, rect.height)
     const P = THREE.MathUtils.clamp(
-      (viewportH * 0.9 - rect.top) / (span + viewportH * 0.9), 0, 1)
+      (viewportH * 0.85 - rect.top) / (span + viewportH * 0.85), 0, 1)
 
     // smooth the input so wheel steps become one continuous stroke
     const k = 1 - Math.pow(0.002, dt)
@@ -183,10 +197,11 @@ export class ScrollRibbon {
       return t * t * (3 - 2 * t)
     }
     const u = this.material.uniforms
-    /* Draw fast, early: the whole stroke must finish while its own region
-     * is still on screen, or the loop completes where nobody sees it. */
-    u.u_showRatio.value = sm(0.0, 0.42, this.progress) * 1.06
-    u.u_hideRatio.value = sm(0.85, 1.0, this.progress)
+    /* The head follows the scroll: near-linear over the whole span, so at
+     * every stop the pen has just written the part of the shape the viewer
+     * is looking at (stub -> C -> loop -> exit right -> dive). */
+    u.u_showRatio.value = sm(0.02, 0.92, this.progress) * 1.03
+    u.u_hideRatio.value = sm(0.94, 1.0, this.progress) * 0.4
     u.u_scrollY.value = scrollY
 
     // nothing to draw yet (or fully erased): skip the mesh entirely

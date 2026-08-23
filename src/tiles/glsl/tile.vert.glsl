@@ -38,6 +38,8 @@ uniform float u_parallax;     // css px
  * height). Driven on the CPU from the expansion's own velocity, so the
  * sheet billows while it grows and relaxes when it lands. */
 uniform vec2  u_expandCurl;
+uniform float u_expandS;      // asymmetric S-bend across the width
+uniform float u_expandTilt;   // radians, whole-sheet rotation
 
 varying vec2  v_uv;
 varying vec2  v_domWH;
@@ -53,8 +55,8 @@ void main() {
   float bulge = 1.0 - (cos(r * 6.2831853) * 0.5 + 0.5);
   domXY.x += bulge * domWH.x * 0.1;
 
-  // settle rotation, in the rect's own plane around its centre
-  float rot = (smoothstep(0.0, 1.0, r) - r) * -0.5;
+  // settle rotation from the reveal + the expansion's cloth tilt
+  float rot = (smoothstep(0.0, 1.0, r) - r) * -0.5 + u_expandTilt;
   vec2 p = (position.xy - 0.5) * domWH;
   float c = cos(rot), s = sin(rot);
   p = vec2(p.x * c - p.y * s, p.x * s + p.y * c);
@@ -70,6 +72,7 @@ void main() {
   // dynamics - this is the "curly" full-width sheet mid-transition
   float archY = 4.0 * position.y * (1.0 - position.y);
   p.y += u_expandCurl.x * domWH.y * arch;
+  p.y += u_expandS * domWH.y * sin(6.2831853 * (position.x - 0.5)) * 0.5;
   p.x += u_expandCurl.y * domWH.x * archY;
 
   vec2 screen = domXY + p;
