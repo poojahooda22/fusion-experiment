@@ -6,6 +6,7 @@ import reelFrag from './glsl/reel.frag.glsl'
 import { ScreenPaint } from '../oilwater/ScreenPaint.js'
 import { ScrollState } from './ScrollState.js'
 import { ScrollRibbon } from './ScrollRibbon.js'
+import { lenis } from '../scroll/smooth.js'
 
 /**
  * The DOM-synced media overlay.
@@ -27,10 +28,77 @@ import { ScrollRibbon } from './ScrollRibbon.js'
  *   - GALLERY tiles are glued to their DOM rects (so captions never
  *     separate), slide+rotate in from alternating sides on entry, bow
  *     their interior against scroll velocity, and ripple with it
+ *
+ * ONE exception to "no triggers": the reel's morph zone SNAPS. The
+ * reference never lets its reel rest half-open - a nudge into the
+ * zone commits the page (an eased auto-scroll) to whichever end the
+ * hand was travelling toward, so the scrub always plays to a clean
+ * state. The morph itself stays a pure function of scroll; only the
+ * scroll position is chaperoned. See _updateSnap().
  */
 
 const clamp = (x, a, b) => (x < a ? a : x > b ? b : x)
 const expoOut = (e) => (e === 1 ? 1 : 1 - Math.pow(2, -10 * e))
+
+/* Pixel-distortion field step, shared by every media surface: relax all
+ * cells toward zero (the heal), then brush the cursor's velocity into the
+ * cells within radius, weighted by 1/distance. Source effect's tuning:
+ * radius 0.25 of the grid, strength 0.11, relaxation 0.9. */
+function brushField(data, g, rectL, rectT, rectW, rectH, m) {
+  for (let i = 0; i < data.length; i += 4) {
+    data[i] *= 0.9
+    data[i + 1] *= 0.9
+  }
+  if (!m) return
+  const mx = (m.x - rectL) / rectW
+  const my = (m.y - rectT) / rectH
+  if (mx < -0.3 || mx > 1.3 || my < -0.3 || my > 1.3) return
+  const gx = mx * g, gy = my * g
+  const maxDist = g * 0.25
+  const nvx = m.dx / rectW, nvy = m.dy / rectH
+  const i0 = Math.max(0, Math.floor(gx - maxDist))
+  const i1 = Math.min(g - 1, Math.ceil(gx + maxDist))
+  const j0 = Math.max(0, Math.floor(gy - maxDist))
+  const j1 = Math.min(g - 1, Math.ceil(gy + maxDist))
+  for (let j = j0; j <= j1; j++) {
+    for (let i = i0; i <= i1; i++) {
+      const d2 = (i - gx) * (i - gx) + (j - gy) * (j - gy)
+      if (d2 < maxDist * maxDist) {
+        const power = Math.min(maxDist / Math.sqrt(Math.max(d2, 1)), 10)
+        const idx = 4 * (j * g + i)
+        data[idx] += 0.11 * 100 * nvx * power
+        data[idx + 1] -= 0.11 * 100 * nvy * power
+      }
+    }
+  }
+}
+
+/* One distortion field per surface. The physics runs in floats; the GPU
+ * copy is a BYTE texture (float DataTextures upload as zeros on this
+ * stack - proven by bisect - and bytes are plenty for a chunky effect).
+ * Encoding: offset range [-15, +15] mapped to [0, 255], 128 = zero. */
+const OFF_RANGE = 15
+function makeField(grid) {
+  const data = new Float32Array(grid * grid * 4)
+  const bytes = new Uint8Array(grid * grid * 4).fill(128)
+  const tex = new THREE.DataTexture(bytes, grid, grid, THREE.RGBAFormat, THREE.UnsignedByteType)
+  tex.magFilter = THREE.NearestFilter
+  tex.minFilter = THREE.NearestFilter
+  tex.needsUpdate = true
+  return { data, bytes, tex, grid }
+}
+
+/* float working values -> byte texture, clamped to the encoding range */
+function quantizeField(field) {
+  const { data, bytes } = field
+  for (let i = 0; i < data.length; i += 4) {
+    const x = data[i] < -OFF_RANGE ? -OFF_RANGE : data[i] > OFF_RANGE ? OFF_RANGE : data[i]
+    const y = data[i + 1] < -OFF_RANGE ? -OFF_RANGE : data[i + 1] > OFF_RANGE ? OFF_RANGE : data[i + 1]
+    bytes[i] = (x / OFF_RANGE) * 127 + 128
+    bytes[i + 1] = (y / OFF_RANGE) * 127 + 128
+  }
+  field.tex.needsUpdate = true
+}
 
 class Tile {
   constructor(el, texture, paint, viewportUniform, index) {
@@ -78,8 +146,12 @@ class Tile {
           u_toTR: { value: new THREE.Vector2() },
           u_toBL: { value: new THREE.Vector2() },
           u_toBR: { value: new THREE.Vector2() },
+          u_offsetTexture: { value: null },
         },
       })
+      this.grid = Number(el.dataset.grid ?? 50)
+      this._field = makeField(this.grid)
+      this.material.uniforms.u_offsetTexture.value = this._field.tex
       return
     }
 
@@ -105,15 +177,24 @@ class Tile {
         u_cBR: { value: new THREE.Vector2() },
         u_domWH: { value: new THREE.Vector2(1, 1) },
         u_bow: { value: new THREE.Vector2() },
+        u_offsetTexture: { value: null },
       },
     })
     this._bow = new THREE.Vector2()
+
+    /* pixel-distortion field: one offset vector per grid cell. NEAREST
+     * filtering is the effect - whole cells shift together, the blocky
+     * smear. Brushed and relaxed on the CPU every frame. */
+    this.grid = Number(el.dataset.grid ?? 50)
+    this._field = makeField(this.grid)
+    this.material.uniforms.u_offsetTexture.value = this._field.tex
 
     el.addEventListener('pointerenter', () => { this.hoverTarget = 1 })
     el.addEventListener('pointerleave', () => { this.hoverTarget = 0 })
   }
 
   update(dt, scroll, viewportH) {
+    this._mouse = scroll.mouse
     if (this.expand) return this._updateReel(viewportH)
     return this._updateGallery(dt, scroll, viewportH)
   }
@@ -125,10 +206,28 @@ class Tile {
     const own = this.el.getBoundingClientRect()        // full slot
     const stage = this.stageEl.getBoundingClientRect() // scroll runway
 
-    /* ~0.6 viewport of scroll = fully grown. No trigger, no snap: the
-     * page-level smooth scroll eases this after the wheel stops, and
-     * scrubbing back un-morphs it symmetrically. */
+    /* ~0.6 viewport of scroll = fully grown. The scrub stays a pure
+     * function of position; MediaTiles' snap (see _updateSnap) walks
+     * the position itself to an end state, so this always completes. */
     const sr = clamp((viewportH - stage.top) / (viewportH * 0.62), 0, 1)
+
+    /* the plus-sign frame appears IN PLACE - a plain fade, one second
+     * after the sheet reaches full width. No travel, no spin: the
+     * crosses were always there, the light just comes up on them.
+     * Wall-clock, so a throttled tab cannot stretch the delay. */
+    if (sr >= 0.995) {
+      this._fullT ??= performance.now()
+      if (!this._crossesIn && performance.now() - this._fullT > 1000) {
+        this._crossesIn = true
+        this.stageEl.classList.add('crosses-in')
+      }
+    } else if (sr < 0.9) {
+      this._fullT = undefined
+      if (this._crossesIn) {
+        this._crossesIn = false
+        this.stageEl.classList.remove('crosses-in')
+      }
+    }
 
     /* big endpoint: vertically centred while approaching, riding up with
      * the layout once the slot's own top passes centre */
@@ -159,6 +258,15 @@ class Tile {
       this._reelActive = active
       this._sectionEl?.classList.toggle('reel-active', active)
     }
+
+    /* pixel distortion rides the sheet: brush against its current rect
+     * (the from->to lerp is a fair stand-in for the unfurling shape) */
+    const rl = from.left + (L - from.left) * sr
+    const rt = from.top + (toTop - from.top) * sr
+    const rw = from.width + (W - from.width) * sr
+    const rh = from.height + (H - from.height) * sr
+    brushField(this._field.data, this.grid, rl, rt, rw, rh, this._mouse)
+    quantizeField(this._field)
 
     const top = Math.min(from.top, toTop)
     const bottom = Math.max(from.top + from.height, toTop + H)
@@ -220,6 +328,10 @@ class Tile {
     /* scroll-velocity ripple */
     u.u_rippleStrength.value = Math.min(0.15, (scroll.strength || 0) * 0.5)
 
+    /* pixel distortion: relax + brush against this tile's rect */
+    brushField(this._field.data, this.grid, own.left, T, W, H, scroll.mouse)
+    quantizeField(this._field)
+
     /* hover ease, ~200 ms both ways */
     const k = 1 - Math.pow(0.0001, dt)
     this.hoverRatio += (this.hoverTarget - this.hoverRatio) * k
@@ -257,6 +369,10 @@ export class MediaTiles {
 
     this.paint = new ScreenPaint(this.renderer, { scale: 0.35, lowScale: 0.1 })
     this.scroll = new ScrollState()
+    /* cursor position + per-event velocity, for the tiles' distortion
+     * brush. Exposed through the scroll object every tile already gets. */
+    this.mouse = { x: -1e4, y: -1e4, dx: 0, dy: 0 }
+    this.scroll.mouse = this.mouse
     this.tiles = []
     /* SUBDIVIDED plane: the unfurl and the bow are interior/per-vertex
      * deformations - a 1x1-segment quad renders them as nothing */
@@ -272,10 +388,18 @@ export class MediaTiles {
     /* ScreenPaint's pointer() takes uv space (0..1, origin bottom-left) -
      * feeding it raw client pixels puts the brush hundreds of units off the
      * buffer and the ripple never draws. Normalise against the viewport. */
-    this._onMove = (e) => this.paint.pointer(
-      e.clientX / window.innerWidth,
-      1 - e.clientY / window.innerHeight,
-    )
+    this._onMove = (e) => {
+      this.paint.pointer(
+        e.clientX / window.innerWidth,
+        1 - e.clientY / window.innerHeight,
+      )
+      if (this.mouse.x > -1e3) {
+        this.mouse.dx = e.clientX - this.mouse.x
+        this.mouse.dy = e.clientY - this.mouse.y
+      }
+      this.mouse.x = e.clientX
+      this.mouse.y = e.clientY
+    }
     window.addEventListener('pointermove', this._onMove, { passive: true })
 
     this.resize()
@@ -288,10 +412,65 @@ export class MediaTiles {
       this.ribbon.build(window.scrollY, window.innerHeight)
     }
 
+    /* reel snap state: no auto-scroll for reduced-motion hands */
+    this._snapTarget = null
+    this._reduced = !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+
     this._loop = this._loop.bind(this)
     this._frames = 0
     if (typeof window !== 'undefined') window.__tilesDebug = this
     requestAnimationFrame(this._loop)
+  }
+
+  /* ---- the reel's chaperone -------------------------------------------
+   * The reference commits: inside the morph zone the page auto-scrolls
+   * (~1s ease) to full-and-centred when travelling down, back to the
+   * statement when travelling up, and to the nearest end from a dead
+   * stop. The user's hand always wins - wheeling against a snap in
+   * flight releases it. Everything is measured fresh each frame, so
+   * resizes and relayouts can't strand a stale target. */
+  _updateSnap() {
+    if (this._reduced || !lenis) return
+    const t = (this._reelTile ??= this.tiles.find((x) => x.expand))
+    if (!t || !t.stageEl) return
+
+    const vh = window.innerHeight
+    const top = t.stageEl.getBoundingClientRect().top
+    const pz = (vh - top) / vh
+    if (pz <= 0.02 || pz >= 0.98) { this._snapTarget = null; return }
+
+    const y = window.scrollY
+    const yExpanded = Math.round(y + top) // stage top pinned to viewport top
+    const yCollapsed = yExpanded - vh     // stage a full viewport away
+    const v = this.scroll.velocity        // smoothed px/s, + is down
+
+    /* a hitched frame (shader compile, tab wake) can pair a stale
+     * scrollY with a fresh rect and cook a nonsense velocity or end
+     * point - sit that frame out rather than commit to garbage */
+    if (Math.abs(v) > 6000) return
+
+    if (this._snapTarget != null) {
+      const toward = Math.sign(this._snapTarget - y) || 1
+      const wanted = this._snapTarget - y > 0 ? yExpanded : yCollapsed
+      if (Math.abs(wanted - this._snapTarget) > 40) this._snapTarget = null // aim drifted: re-fire
+      else if (v * toward < -80) this._snapTarget = null       // hand fights: let go
+      else if (Math.abs(v) < 15 && Math.abs(this._snapTarget - y) > 8) {
+        this._snapTarget = null                                // stalled: re-arm below
+      } else return
+    }
+
+    let target = null
+    if (v > 60) target = yExpanded                             // travelling down: commit full
+    else if (v < -60) target = yCollapsed                      // travelling up: commit closed
+    else if (Math.abs(v) < 30) target = pz > 0.5 ? yExpanded : yCollapsed // idle: nearest
+    if (target == null || Math.abs(target - y) < 4) return
+
+    this._snapTarget = target
+    lenis.scrollTo(target, {
+      duration: 1.05,
+      easing: (x) => 1 - Math.pow(1 - x, 3),
+      onComplete: () => { this._snapTarget = null },
+    })
   }
 
   collect() {
@@ -339,6 +518,9 @@ export class MediaTiles {
 
     this.scroll.update(dt)
     this.paint.update(dt)
+    this.mouse.dx *= 0.9
+    this.mouse.dy *= 0.9
+    this._updateSnap()
     this.ribbon?.update(dt, this.scroll.y, window.innerHeight)
 
     let anyVisible = !!(this.ribbon && this.ribbon.mesh.visible)
@@ -361,7 +543,7 @@ export class MediaTiles {
     this.paint.dispose()
     this.ribbon?.dispose()
     this.geometry.dispose()
-    this.tiles.forEach((t) => t.material.dispose())
+    this.tiles.forEach((t) => { t._field?.tex.dispose(); t.material.dispose() })
     this.renderer.dispose()
     this.canvas.remove()
   }

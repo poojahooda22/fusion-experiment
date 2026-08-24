@@ -7,14 +7,13 @@ precision highp float;
  *     interpolated) width/height, anti-aliased with fwidth
  *   - object-fit: cover via CPU u_uvScale/u_uvOffset
  *   - full colour at every stage (no duotone floor on this surface)
- *   - cursor-fluid ripple from the shared paint buffer
+ *   - pixel distortion: a coarse per-sheet offset field, brushed by
+ *     the cursor and relaxed on the CPU, shifts the lookup in
+ *     whole-cell chunks (nearest-filtered)
  * ------------------------------------------------------------------ */
 
 uniform sampler2D u_texture;
-uniform sampler2D u_paintTexture;   // shared screen-space fluid
-uniform vec2  u_paintTexel;
-uniform float u_paintPush;
-uniform vec2  u_viewport;           // css px
+uniform sampler2D u_offsetTexture;  // per-sheet distortion field, NEAREST
 uniform vec2  u_uvScale;            // cover-fit
 uniform vec2  u_uvOffset;
 uniform float u_cornerRadius;       // css px
@@ -38,15 +37,11 @@ void main() {
   /* cover fit (v_uv.y is screen top-down; texture is bottom-up, so flip) */
   vec2 uv = vec2(v_uv.x, 1.0 - v_uv.y) * u_uvScale + u_uvOffset;
 
-  /* cursor fluid ripple: the paint buffer lives in screen space */
-  vec2 screenUv = gl_FragCoord.xy / u_viewport;
-  vec4 paint = texture2D(u_paintTexture, screenUv);
-  vec2 flow = (paint.xy - 0.5) * u_paintPush * u_paintTexel;
-  float film = paint.z + paint.w;
-  uv -= flow * smoothstep(0.0, 0.1, film) * 0.7;
+  /* pixel distortion: whole cells shift together (nearest-filtered) */
+  vec2 cellOffset = (texture2D(u_offsetTexture, v_uv).rg - 0.5) * 30.0;
+  uv -= 0.02 * cellOffset;
 
   vec3 color = texture2D(u_texture, uv).rgb;
-  color += vec3(film * 0.06);
 
   gl_FragColor = vec4(color, alpha);
 }

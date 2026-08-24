@@ -1,11 +1,14 @@
 /* ------------------------------------------------------------------ *
- * Sections under the hero. Layout + type is DOM and stays perfectly
- * STILL while scrolling - all motion lives in the WebGL imagery (the
- * reference moves only its media; its text never wobbles).
+ * Sections under the hero. Layout is DOM; imagery is WebGL. The
+ * statement TEXT drifts against the scroll at per-block rates (title
+ * 5%, paragraph 14.2%, CTA 11.8% - measured off the reference), via
+ * transforms only, so every layout rect the WebGL reads stays put.
  *
  * Measured off the reference at a 1600px viewport: 80px side padding
  * (5vw), project cards 704x458 (aspect 1.538) with 15px corners on a
  * 32px (2vw) column gap, a 128px display heading over the gallery.
+ * The reference's cross decorations: 14px plus signs (two 1.75px
+ * bars), five across the reel's width, 2 cross-sizes off its edges.
  * ------------------------------------------------------------------ */
 
 :root {
@@ -47,7 +50,14 @@
   line-height: 0.98;
   letter-spacing: -0.02em;
   font-weight: 500;
+  will-change: transform; /* scroll parallax writes here every frame */
 }
+
+.statement__title-line { display: block; }
+
+/* the reference pushes its FIRST line right by two grid columns plus
+   two gaps - about 15.3vw - so the title steps down-and-left */
+.statement__title-line--1 { padding-left: clamp(48px, 15.3vw, 252px); }
 
 .statement__row {
   display: grid;
@@ -72,9 +82,10 @@
    top of the screen for that whole distance, and the WebGL sheet springs
    from the anchor box above into .reel-slot while it is pinned. */
 .reel-stage {
-  /* the sheet reaches full width within ~60% of the approach viewport
-     (one flick), rides up to the pin, holds a 10vh beat, and releases */
-  height: 110vh;
+  /* the sheet reaches full width within ~60% of the approach viewport,
+     then the pin HOLDS the centred reel for half a viewport before it
+     releases - the reference sits on its reel, it never clips past */
+  height: 150vh;
   margin: 6vh 0 0;
 }
 
@@ -91,6 +102,13 @@
   pointer-events: none;
 }
 
+/* parallax rides on the wrapper so the button keeps its own hover
+   transform untouched */
+.statement__ctaWrap {
+  display: inline-block;
+  will-change: transform;
+}
+
 .reel-sticky {
   position: sticky;
   top: 0;
@@ -102,6 +120,11 @@
 
 /* the expanded reel keeps the page's 5vw side margins, like the
    reference - never a hard 100vw bleed */
+.reel-frame {
+  position: relative;
+  width: 100%;
+}
+
 .reel-slot {
   width: 100%;
   aspect-ratio: 2.05;
@@ -109,6 +132,54 @@
   border-radius: 20px;
   cursor: pointer;
 }
+
+/* ---- the reel's plus-sign frame ----------------------------------- */
+
+/* two rows of five 14px crosses, 0/25/50/75/100% across the slot,
+   parked two cross-sizes off its edges. They appear IN PLACE - a plain
+   opacity fade one second after the sheet reaches full width
+   (MediaTiles toggles .crosses-in on the stage). */
+.reel-crosses {
+  --cross-size: 14px;
+  position: absolute;
+  left: 0;
+  width: 100%;
+  height: var(--cross-size);
+  pointer-events: none;
+}
+
+.reel-crosses--top { top: calc(-2 * var(--cross-size)); }
+.reel-crosses--bottom { bottom: calc(-2 * var(--cross-size)); }
+
+.reel-cross {
+  position: absolute;
+  top: 0;
+  width: var(--cross-size);
+  height: var(--cross-size);
+  opacity: 0;
+  transition: opacity 0.5s ease;
+}
+
+.reel-stage.crosses-in .reel-cross { opacity: 1; }
+
+.reel-cross:nth-child(1) { left: 0; }
+.reel-cross:nth-child(2) { left: calc(25% - var(--cross-size) / 2); }
+.reel-cross:nth-child(3) { left: calc(50% - var(--cross-size) / 2); }
+.reel-cross:nth-child(4) { left: calc(75% - var(--cross-size) / 2); }
+.reel-cross:nth-child(5) { left: calc(100% - var(--cross-size)); }
+
+.reel-cross::before,
+.reel-cross::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: calc(50% - 0.0625 * var(--cross-size));
+  width: var(--cross-size);
+  height: calc(0.125 * var(--cross-size));
+  background: var(--ink);
+}
+
+.reel-cross::after { transform: rotate(90deg); }
 
 /* the reference's paragraph: ~40% of the viewport, upper right, set a
    size up from body text */
@@ -121,6 +192,7 @@
   margin: 0 0 5vh;
   font-size: clamp(16px, 1.45vw, 23px);
   line-height: 1.45;
+  will-change: transform; /* scroll parallax writes here every frame */
 }
 
 .statement__cta {
@@ -165,13 +237,32 @@
   margin: 0 0 7vh;
 }
 
+/* the heading is an overflow-hidden BOX; each character starts a full
+   line-height below its seat and climbs out on a 35ms-per-letter
+   stagger the first time the head scrolls into the lower viewport
+   (see the IntersectionObserver in Sections.jsx). Runs once. */
 .gallery__title {
   margin: 0;
   font-size: clamp(56px, 8vw, 150px);
   font-weight: 400;
   letter-spacing: -0.02em;
   line-height: 0.92;
+  overflow: hidden;
+  padding-bottom: 0.06em; /* keeps the mask off the baseline */
 }
+
+.gallery__title-word {
+  display: inline-block;
+  white-space: nowrap;
+}
+
+.gallery__title-char {
+  display: inline-block;
+  transform: translateY(118%);
+  transition: transform 0.72s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.gallery__title.is-revealed .gallery__title-char { transform: translateY(0); }
 
 .gallery__blurb {
   margin: 0 0 1.2em;
@@ -276,6 +367,13 @@
 @media (prefers-reduced-motion: reduce) {
   .gallery__arrow,
   .gallery__char { transition: none; }
+
+  /* no masked climb, no parallax, no snap (MediaTiles checks the same
+     query) - text simply sits where it belongs */
+  .gallery__title-char {
+    transition: none;
+    transform: none;
+  }
 }
 
 /* the empty boxes the WebGL tiles draw over */

@@ -30,8 +30,12 @@ void main() {
   // diagonal reveal weight: ~1 at screen top-left, ~0 at bottom-right
   float pw = 1.0 - (pow(position.x * position.x, 0.75) + pow(position.y, 1.5)) * 0.5;
 
-  // remap the single global scrub into a PER-VERTEX ratio -> the unfurl
-  float sr = smoothstep(pw * 0.3, 0.7 + pw * 0.3, u_showRatio);
+  /* global ease on the drive so the whole cloud DECELERATES into full
+   * width - a linear scrub lands with visible speed; this sticks */
+  float g = u_showRatio * u_showRatio * (3.0 - 2.0 * u_showRatio);
+
+  // remap the eased scrub into a PER-VERTEX ratio -> the unfurl
+  float sr = smoothstep(pw * 0.3, 0.7 + pw * 0.3, g);
 
   // interpolate this vertex's rect corners from card -> full on its own sr
   vec2 tl = mix(u_fromTL, u_toTL, sr);
@@ -48,8 +52,11 @@ void main() {
   // lateral sway that peaks mid-morph (carried by two hands), zero at ends
   p.x += mix(wh.x, 0.0, cos(sr * 6.2831853) * 0.5 + 0.5) * 0.1;
 
-  // small twist, zero at both ends, maximal mid-morph
-  float rot = (smoothstep(0.0, 1.0, sr) - sr) * -0.5;
+  /* small twist, maximal mid-morph. The bump 16 t^2 (1-t)^2 is zero AND
+   * flat at both ends - the old (smoothstep - t) curve ended on a slope,
+   * so the sheet was still rotating the instant it reached full width,
+   * which read as a bounce at the landing. */
+  float rot = -0.05 * 16.0 * sr * sr * (1.0 - sr) * (1.0 - sr);
   vec2 centre = (tl + tr + bl + br) * 0.25;
   vec2 q = p - centre;
   float c = cos(rot), s = sin(rot);
