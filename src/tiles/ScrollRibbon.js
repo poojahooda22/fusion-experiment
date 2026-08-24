@@ -77,10 +77,17 @@ function catmullRom(p0, p1, p2, p3, t) {
   ]
 }
 
+// draw timing: start when the section top is 0.4 viewports above the fold,
+// finish 1.3 viewports of scroll later
+const F0 = 0.4
+const F1 = 1.3
+
+// quadInOut - the ONLY easing on the draw; position in, ratio out
+const quadInOut = (e) => ((e *= 2) < 1 ? 0.5 * e * e : -0.5 * ((e -= 1) * (e - 2) - 1))
+
 export class ScrollRibbon {
   constructor(scene, sectionEl) {
     this.sectionEl = sectionEl
-    this.progress = 0
 
     this.material = new THREE.ShaderMaterial({
       vertexShader,
@@ -188,36 +195,24 @@ export class ScrollRibbon {
   }
 
   /**
-   * Drive the draw window from the section's position in the viewport.
-   * P: 0 as the section's top reaches the bottom of the screen, 1 as its
-   * authored region (~2.6 viewport heights) has scrolled past.
+   * The draw ratio is a DIRECT, eased function of the section's scroll
+   * position - no temporal smoothing, no erase-behind. The pen is welded
+   * to the scrollbar: scrub back and it unwrites, stop and it holds. The
+   * finished figure is never erased; it simply scrolls away with the
+   * section.
    */
-  update(dt, scrollY, viewportH, reelP = 0) {
+  update(dt, scrollY, viewportH) {
     const rect = this.sectionEl.getBoundingClientRect()
-    const span = Math.min(viewportH * 2.6, rect.height)
-    const P = THREE.MathUtils.clamp(
-      (viewportH * 0.85 - rect.top) / (span + viewportH * 0.85), 0, 1)
+    let a = THREE.MathUtils.clamp(
+      -(rect.top - F0 * viewportH) / (F1 * viewportH), 0, 1)
+    a = quadInOut(a)
 
-    // smooth the input so wheel steps become one continuous stroke
-    const k = 1 - Math.pow(0.0005, dt)
-    this.progress += (P - this.progress) * k
-
-    const sm = (a, b, x) => {
-      const t = THREE.MathUtils.clamp((x - a) / (b - a), 0, 1)
-      return t * t * (3 - 2 * t)
-    }
     const u = this.material.uniforms
-    /* The whole figure - entry arc, card loop, S-sweep, parked hook - is
-     * fully written within one scroll into the section (P 0.42), then
-     * HOLDS with its round head parked mid-screen. It erases in sync
-     * with the showreel's expansion (reelP), with a scroll-based sweep
-     * as the backstop for scrolling straight past. */
-    u.u_showRatio.value = sm(0.02, 0.38, this.progress) * 1.02
-    u.u_hideRatio.value = Math.max(sm(0.62, 0.90, this.progress), sm(0.10, 0.72, reelP))
+    u.u_showRatio.value = a
+    u.u_hideRatio.value = 0
     u.u_scrollY.value = scrollY
 
-    // nothing to draw yet (or fully erased): skip the mesh entirely
-    this.mesh.visible = u.u_showRatio.value > 0.001 && u.u_hideRatio.value < 0.999
+    this.mesh.visible = a > 0.001
   }
 
   dispose() {

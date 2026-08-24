@@ -1,6 +1,7 @@
 import { Hero } from './hero/Hero.jsx'
 import { ShapeStudy } from './hero/ShapeStudy.jsx'
 import { Sections } from './sections/Sections.jsx'
+import { Footer } from './footer/Footer.jsx'
 import './scroll/smooth.js'
 
 export default function App() {
@@ -16,7 +17,12 @@ export default function App() {
   return (
     <>
       <Hero />
-      {params?.get('sections') !== '0' && <Sections />}
+      {params?.get('sections') !== '0' && (
+        <>
+          <Sections />
+          <Footer />
+        </>
+      )}
     </>
   )
 }

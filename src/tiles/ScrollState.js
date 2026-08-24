@@ -16,12 +16,14 @@ export class ScrollState {
     this.y = typeof window !== 'undefined' ? window.scrollY : 0
     this.velocity = 0
     this.bend = 0
+    this.strength = 0            // 0..1 eased scroll strength (ripple driver)
     this._lastY = this.y
   }
 
   update(dt) {
     this.y = window.scrollY
-    const raw = (this.y - this._lastY) / Math.max(dt, 1e-4) // px/s
+    const delta = this.y - this._lastY
+    const raw = delta / Math.max(dt, 1e-4) // px/s
     this._lastY = this.y
 
     // ~90 ms half-life: quick to react, quick to settle
@@ -31,5 +33,11 @@ export class ScrollState {
     // px/s -> bend factor; sub-pixel-per-frame scrolling should not wobble
     const shaped = this.velocity * 0.00012
     this.bend = Math.max(-0.09, Math.min(0.09, shaped))
+
+    /* eased scroll strength, measured in viewports scrolled: accumulate
+     * |delta|, decay toward 0, clamp to 1 - drives the gallery ripple */
+    this.strength += Math.abs(delta) / Math.max(window.innerHeight, 1)
+    this.strength += (0 - this.strength) * (1 - Math.exp(-10 * dt))
+    this.strength = Math.min(this.strength, 1)
   }
 }
